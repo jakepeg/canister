@@ -1,0 +1,38 @@
+{
+  "canisters": {
+    "canister_backend": {
+      "main": "src/canister_backend/main.mo",
+      "type": "motoko"
+    },
+    "canister_frontend": {
+      "dependencies": [
+        "canister_backend"
+      ],
+      "source": [
+        "src/canister_frontend/dist"
+      ],
+      "type": "assets",
+      "workspace": "src/canister_frontend"
+    },
+    "internet_identity": {
+      "candid": "https://github.com/dfinity/internet-identity/releases/download/release-2025-04-04-v3/internet_identity.did",
+      "frontend": {},
+      "init_arg": "(opt record { captcha_config = opt record { max_unsolved_captchas= 50:nat64; captcha_trigger = variant {Static = variant {CaptchaDisabled}}}})",
+      "remote": {
+        "id": {
+          "ic": "rdmx6-jaaaa-aaaaa-aaadq-cai"
+        }
+      },
+      "type": "custom",
+      "wasm": "https://github.com/dfinity/internet-identity/releases/download/release-2025-04-04-v3/internet_identity_dev.wasm.gz"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}

@@ -1,0 +1,36 @@
+# IDEs
+.vscode/
+.idea/
+**/*~
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# dfx
+.dfx/
+
+# generated bindings (from dfx generate)
+**/declarations/
+
+target/
+
+node_modules/
+dist/
+.svelte-kit/
+
+.env
+.env.local
+.env.*.local
+.env.*
+!.env.example
+
+# local helper artifacts
+.tmp_*
+
+# canister/frontend generated runtime config
+**/env.json
+canister_ids.json
+
+*.log
+.cache/

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Canister — Future-proof your memories & digital assets</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=DM+Mono:wght@300;400&family=Outfit:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --gold: #b8965a;
+  --gold-light: #d4b07a;
+  --ink: #0e0e0d;
+  --ink-soft: #7a7a74;
+  --cream: #f5f2ec;
+  --seal: #161614;
+  --border: rgba(184,150,90,0.12);
+}
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Outfit', sans-serif;
+  background: var(--ink);
+  color: var(--cream);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* NAV */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1.25rem 2.5rem;
+  border-bottom: 0.5px solid var(--border);
+  background: rgba(14,14,13,0.92);
+  backdrop-filter: blur(12px);
+}
+.logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.logo-text { font-family: 'DM Mono', monospace; font-size: 14px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cream); }
+.nav-links { display: flex; align-items: center; gap: 2rem; list-style: none; }
+.nav-links a { font-size: 12px; font-weight: 300; color: var(--ink-soft); text-decoration: none; letter-spacing: 0.04em; transition: color 0.2s; }
+.nav-links a:hover { color: var(--cream); }
+.nav-cta { font-family: 'DM Mono', monospace !important; font-size: 10px !important; letter-spacing: 0.1em !important; text-transform: uppercase; color: var(--gold) !important; border: 0.5px solid rgba(184,150,90,0.35); padding: 0.45rem 1.1rem; border-radius: 3px; }
+.nav-cta:hover { background: rgba(184,150,90,0.08) !important; }
+
+/* HERO */
+.hero { padding: 6rem 2.5rem 5.5rem; text-align: center; position: relative; overflow: hidden; }
+.hero-glow { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 65% 55% at 50% 50%, rgba(184,150,90,0.07) 0%, transparent 70%); }
+.hero-grid { position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(rgba(184,150,90,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(184,150,90,0.035) 1px, transparent 1px); background-size: 56px 56px; mask-image: radial-gradient(ellipse 75% 75% at 50% 50%, black 10%, transparent 72%); -webkit-mask-image: radial-gradient(ellipse 75% 75% at 50% 50%, black 10%, transparent 72%); }
+.eyebrow { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gold); margin-bottom: 1.5rem; display: inline-flex; align-items: center; gap: 10px; position: relative; }
+.eyebrow::before, .eyebrow::after { content: ''; display: block; width: 28px; height: 0.5px; background: var(--gold); opacity: 0.45; }
+h1 { font-family: 'Cormorant Garamond', serif; font-size: clamp(3rem, 6.5vw, 5.5rem); font-weight: 300; line-height: 1.04; color: var(--cream); margin-bottom: 1.25rem; position: relative; }
+h1 em { font-style: italic; color: var(--gold-light); }
+.hero-sub { font-family: 'Cormorant Garamond', serif; font-size: clamp(1rem, 2vw, 1.3rem); font-weight: 300; font-style: italic; color: var(--ink-soft); margin-bottom: 2.5rem; line-height: 1.6; position: relative; }
+.actions { display: flex; align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap; position: relative; }
+.btn-primary { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; background: var(--gold); color: var(--ink); border: none; padding: 0.9rem 2.25rem; border-radius: 3px; cursor: pointer; text-decoration: none; display: inline-block; font-weight: 500; transition: background 0.2s, transform 0.2s; }
+.btn-primary:hover { background: var(--gold-light); transform: translateY(-1px); }
+.btn-ghost { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; background: transparent; color: var(--cream); border: 0.5px solid rgba(245,242,236,0.18); padding: 0.9rem 2.25rem; border-radius: 3px; cursor: pointer; text-decoration: none; display: inline-block; transition: border-color 0.2s; }
+.btn-ghost:hover { border-color: rgba(245,242,236,0.4); }
+.hero-note { margin-top: 1.5rem; font-size: 12px; font-weight: 300; color: var(--ink-soft); position: relative; }
+
+/* TRUST */
+.trust { padding: 4rem 2.5rem; border-top: 0.5px solid var(--border); border-bottom: 0.5px solid var(--border); }
+.trust-quote { font-family: 'Cormorant Garamond', serif; font-size: clamp(1.2rem, 2.5vw, 1.8rem); font-weight: 300; font-style: italic; color: var(--cream); line-height: 1.5; text-align: center; margin-bottom: 2.5rem; max-width: 750px; margin-left: auto; margin-right: auto; }
+.trust-quote span { color: var(--gold-light); }
+.divider { height: 0.5px; background: linear-gradient(90deg, transparent, rgba(184,150,90,0.15), transparent); margin: 2rem auto; max-width: 400px; }
+.trust-row { display: flex; justify-content: center; gap: 3rem; flex-wrap: wrap; }
+.trust-item { text-align: center; }
+.trust-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold); margin-bottom: 4px; }
+.trust-val { font-family: 'Cormorant Garamond', serif; font-size: 1rem; font-weight: 300; color: var(--ink-soft); }
+
+/* STEPS */
+.steps-section { padding: 5.5rem 2.5rem; border-top: 0.5px solid var(--border); }
+.section-center { text-align: center; }
+h2 { font-family: 'Cormorant Garamond', serif; font-size: clamp(1.7rem, 3.2vw, 2.6rem); font-weight: 300; color: var(--cream); line-height: 1.15; }
+h2 em { font-style: italic; color: var(--gold-light); }
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; max-width: 860px; margin: 3rem auto 0; }
+.step { padding: 2rem 1.5rem; background: rgba(245,242,236,0.018); border: 0.5px solid var(--border); text-align: left; transition: background 0.3s; }
+.step:hover { background: rgba(184,150,90,0.04); }
+.step-num { font-family: 'Cormorant Garamond', serif; font-size: 3.5rem; font-weight: 300; color: rgba(184,150,90,0.12); line-height: 1; margin-bottom: 0.75rem; }
+.step-title { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gold); margin-bottom: 0.5rem; }
+.step-body { font-size: 13px; font-weight: 300; color: var(--ink-soft); line-height: 1.7; }
+.step-eg { margin-top: 0.75rem; font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(184,150,90,0.5); letter-spacing: 0.04em; }
+
+/* PENDANT */
+.pendant-section { padding: 5.5rem 2.5rem; background: var(--seal); border-top: 0.5px solid var(--border); border-bottom: 0.5px solid var(--border); }
+.pendant-inner { max-width: 920px; margin: 0 auto; display: flex; align-items: center; gap: 5rem; flex-wrap: wrap; }
+.pendant-visual { flex: 0 0 220px; text-align: center; }
+.chain { width: 6px; height: 40px; background: linear-gradient(180deg, #9a7a4a, #7a5a2a); margin: 0 auto; border-radius: 2px; }
+.disc { width: 200px; height: 200px; border-radius: 50%; background: linear-gradient(135deg, #c8a870 0%, #8a6a3a 40%, #b8965a 70%, #d4b07a 100%); margin: 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; position: relative; box-shadow: inset 0 2px 4px rgba(255,255,255,0.15), inset 0 -2px 4px rgba(0,0,0,0.3), 0 16px 48px rgba(0,0,0,0.55); }
+.disc-ring { width: 32px; height: 32px; border-radius: 50%; border: 5px solid #9a7a4a; position: absolute; top: -22px; left: 50%; transform: translateX(-50%); }
+.disc-date { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #1a1a18; font-weight: 400; }
+.pendant-label { margin-top: 1.25rem; }
+.pendant-label p { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 4px; }
+.pendant-price { font-family: 'Cormorant Garamond', serif; font-size: 1.7rem; font-weight: 300; color: var(--gold-light); }
+.pendant-content { flex: 1; min-width: 260px; }
+.pendant-eyebrow { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold); margin-bottom: 1rem; display: block; }
+.pendant-body { font-size: 14px; font-weight: 300; color: var(--ink-soft); line-height: 1.75; margin-bottom: 1.75rem; }
+.specs { display: flex; flex-direction: column; gap: 9px; margin-bottom: 2rem; }
+.spec { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 300; color: var(--ink-soft); }
+.spec-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--gold); flex-shrink: 0; opacity: 0.65; }
+
+/* BLOCKCHAIN */
+.blockchain { padding: 5.5rem 2.5rem; max-width: 860px; margin: 0 auto; }
+.bc-pillars { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin-top: 3rem; }
+.pillar { padding: 1.75rem; background: var(--seal); border: 0.5px solid var(--border); transition: border-color 0.3s; }
+.pillar:hover { border-color: rgba(184,150,90,0.25); }
+.pillar-icon { font-family: 'Cormorant Garamond', serif; font-size: 1.4rem; font-style: italic; color: var(--gold); margin-bottom: 0.5rem; }
+.pillar-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); margin-bottom: 0.4rem; }
+.pillar-body { font-size: 12px; font-weight: 300; color: var(--ink-soft); line-height: 1.6; }
+.bc-body { font-size: 13px; font-weight: 300; color: var(--ink-soft); line-height: 1.85; text-align: center; max-width: 620px; margin: 0 auto; }
+
+/* PRICING */
+.pricing { padding: 5.5rem 2.5rem; border-top: 0.5px solid var(--border); max-width: 960px; margin: 0 auto; }
+.pricing-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; border: 0.5px solid var(--border); margin-top: 3rem; }
+.plan { padding: 2rem 1.5rem; background: var(--seal); }
+.plan.featured { background: rgba(184,150,90,0.05); border-left: 1px solid rgba(184,150,90,0.25); border-right: 1px solid rgba(184,150,90,0.25); }
+.plan-badge { font-family: 'DM Mono', monospace; font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: #0e0e0d; background: var(--gold); padding: 3px 8px; border-radius: 2px; display: inline-block; margin-bottom: 1rem; }
+.plan-tier { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 0.6rem; }
+.plan-price { font-family: 'Cormorant Garamond', serif; font-size: 2.4rem; font-weight: 300; color: var(--cream); line-height: 1; margin-bottom: 4px; }
+.plan-cadence { font-size: 11px; font-weight: 300; color: var(--ink-soft); margin-bottom: 1.5rem; }
+.plan-features { list-style: none; display: flex; flex-direction: column; gap: 8px; margin-bottom: 1.75rem; }
+.plan-features li { font-size: 12px; font-weight: 300; color: var(--ink-soft); display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+.plan-features li::before { content: ''; display: block; width: 4px; height: 4px; border-radius: 50%; background: var(--gold); margin-top: 5px; flex-shrink: 0; opacity: 0.5; }
+
+/* FOOTER */
+footer { padding: 3rem 2.5rem; border-top: 0.5px solid var(--border); display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 1.5rem; }
+.footer-copy { font-size: 11px; font-weight: 300; color: var(--ink-soft); margin-top: 0.5rem; line-height: 1.6; }
+.footer-links { display: flex; gap: 1.75rem; flex-wrap: wrap; align-items: center; }
+.footer-links a { font-size: 11px; font-weight: 300; color: var(--ink-soft); text-decoration: none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--cream); }
+.icp-badge { display: flex; align-items: center; gap: 6px; font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); margin-top: 0.6rem; }
+.icp-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--gold); opacity: 0.55; }
+.mb2 { margin-bottom: 2rem; }
+.mb3 { margin-bottom: 3rem; }
+
+@media (max-width: 768px) {
+  nav { padding: 1rem 1.5rem; }
+  .nav-links { display: none; }
+  .hero { padding: 4rem 1.5rem; }
+  .steps { grid-template-columns: 1fr; }
+  .pendant-inner { flex-direction: column; align-items: center; }
+  .bc-pillars { grid-template-columns: 1fr; }
+  .pricing-grid { grid-template-columns: 1fr 1fr; }
+  .trust-row { gap: 1.5rem; }
+  .steps-section, .blockchain, .trust, .pendant-section { padding: 4rem 1.5rem; }
+  footer { padding: 2.5rem 1.5rem; flex-direction: column; }
+}
+@media (max-width: 480px) {
+  .pricing-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="logo">
+    <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+      <circle cx="16" cy="16" r="15" stroke="#b8965a" stroke-width="1"/>
+      <circle cx="16" cy="16" r="9" stroke="#b8965a" stroke-width="0.5" opacity="0.4"/>
+      <circle cx="16" cy="16" r="4.5" fill="#b8965a" opacity="0.85"/>
+      <circle cx="16" cy="16" r="1.8" fill="#0e0e0d"/>
+    </svg>
+    <span class="logo-text">Canister</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#how">How it works</a></li>
+    <li><a href="#pendant">Pendant</a></li>
+    <li><a href="#blockchain">Blockchain</a></li>
+    <li><a href="#pricing">Pricing</a></li>
+    <li><a href="#" class="nav-cta">Get started</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-glow"></div>
+  <div class="hero-grid"></div>
+  <div class="eyebrow">On-chain time capsules</div>
+  <h1>Future-proof your<br><em>memories &amp; digital assets.</em></h1>
+  <p class="hero-sub">Create and share digital time Canisters that unlock on a future date.</p>
+  <div class="actions">
+    <a href="#" class="btn-primary">Create Time Canister</a>
+    <a href="#how" class="btn-ghost">See how it works</a>
+  </div>
+  <p class="hero-note">It's easy, quick, and free to get started.</p>
+</section>
+
+<!-- TRUST -->
+<section class="trust">
+  <p class="trust-quote">
+    "Most apps will shut down before your capsule opens.<br>
+    <span>Canister is sealed on the blockchain — it opens exactly when you chose, no matter what."</span>
+  </p>
+  <div class="divider"></div>
+  <div class="trust-row">
+    <div class="trust-item"><div class="trust-label">Storage</div><div class="trust-val">100% on-chain</div></div>
+    <div class="trust-item"><div class="trust-label">Encryption</div><div class="trust-val">vetKeys</div></div>
+    <div class="trust-item"><div class="trust-label">Backend</div><div class="trust-val">Rust · ICP</div></div>
+    <div class="trust-item"><div class="trust-label">Unlock</div><div class="trust-val">Smart contract enforced</div></div>
+    <div class="trust-item"><div class="trust-label">Ads</div><div class="trust-val">Never</div></div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="steps-section" id="how">
+  <div class="section-center">
+    <div class="eyebrow">How it works</div>
+    <h2>Three steps to <em>seal a moment forever.</em></h2>
+  </div>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">01</div>
+      <div class="step-title">Create Canister</div>
+      <p class="step-body">Write a message and upload your files — photos, videos, voice notes, documents. Anything worth keeping.</p>
+      <div class="step-eg">"A letter to my future self…"</div>
+    </div>
+    <div class="step">
+      <div class="step-num">02</div>
+      <div class="step-title">Set Unlock Date</div>
+      <p class="step-body">Choose when it unlocks — next year or decades from now. Sealed by smart contract. Nobody can open it early. Not even us.</p>
+      <div class="step-eg">"Open on your 18th birthday — 06.10.2043"</div>
+    </div>
+    <div class="step">
+      <div class="step-num">03</div>
+      <div class="step-title">Share or Gift</div>
+      <p class="step-body">Share a link with the recipient, or order a custom-engraved keepsake pendant with a QR code that links to your Canister.</p>
+      <div class="step-eg">"For Ella. From Dad."</div>
+    </div>
+  </div>
+</section>
+
+<!-- PENDANT -->
+<section class="pendant-section" id="pendant">
+  <div class="pendant-inner">
+    <div class="pendant-visual">
+      <div class="chain"></div>
+      <div class="disc">
+        <div class="disc-ring"></div>
+        <svg width="80" height="80" viewBox="0 0 90 90" fill="none">
+          <rect x="8" y="8" width="28" height="28" rx="3" fill="#f5f2ec" opacity="0.9"/>
+          <rect x="13" y="13" width="18" height="18" rx="2" fill="#1a1a18"/>
+          <rect x="17" y="17" width="10" height="10" rx="1" fill="#f5f2ec" opacity="0.9"/>
+          <rect x="54" y="8" width="28" height="28" rx="3" fill="#f5f2ec" opacity="0.9"/>
+          <rect x="59" y="13" width="18" height="18" rx="2" fill="#1a1a18"/>
+          <rect x="63" y="17" width="10" height="10" rx="1" fill="#f5f2ec" opacity="0.9"/>
+          <rect x="8" y="54" width="28" height="28" rx="3" fill="#f5f2ec" opacity="0.9"/>
+          <rect x="13" y="59" width="18" height="18" rx="2" fill="#1a1a18"/>
+          <rect x="17" y="63" width="10" height="10" rx="1" fill="#f5f2ec" opacity="0.9"/>
+          <rect x="44" y="8" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+          <rect x="44" y="18" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+          <rect x="44" y="30" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+          <rect x="54" y="44" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+          <rect x="66" y="44" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+          <rect x="76" y="44" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+          <rect x="54" y="56" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+          <rect x="66" y="68" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+          <rect x="76" y="76" width="6" height="6" rx="1" fill="#f5f2ec" opacity="0.6"/>
+        </svg>
+        <div class="disc-date">06.10.2045</div>
+      </div>
+      <div class="pendant-label">
+        <p>The Canister Pendant</p>
+        <div class="pendant-price">from £59</div>
+      </div>
+    </div>
+    <div class="pendant-content">
+      <span class="pendant-eyebrow">Gift a physical memory</span>
+      <h2 class="mb2">Order a custom-engraved<br><em>keepsake pendant.</em></h2>
+      <p class="pendant-body">A QR code links directly to your Canister. The unlock date is engraved on the face. A personal message on the reverse. Seal it in the app — wear it in the world.</p>
+      <div class="specs">
+        <div class="spec"><div class="spec-dot"></div>Brushed stainless steel disc</div>
+        <div class="spec"><div class="spec-dot"></div>Laser-engraved QR — your unique Canister key</div>
+        <div class="spec"><div class="spec-dot"></div>Unlock date engraved on the face</div>
+        <div class="spec"><div class="spec-dot"></div>Personal message engraved on the reverse</div>
+        <div class="spec"><div class="spec-dot"></div>Available as keychain or necklace pendant</div>
+        <div class="spec"><div class="spec-dot"></div>NFC chip upgrade available</div>
+      </div>
+      <a href="#" class="btn-primary">Pre-order your pendant</a>
+    </div>
+  </div>
+</section>
+
+<!-- BLOCKCHAIN -->
+<section class="blockchain" id="blockchain">
+  <div class="section-center mb3">
+    <div class="eyebrow">Built on blockchain</div>
+    <h2>You truly own<br><em>your information.</em></h2>
+  </div>
+  <div class="bc-pillars">
+    <div class="pillar">
+      <div class="pillar-icon">◎</div>
+      <div class="pillar-label">Decentralized</div>
+      <p class="pillar-body">Not controlled by Big Tech or any central authority. Your Canister exists on a global network of nodes.</p>
+    </div>
+    <div class="pillar">
+      <div class="pillar-icon">⌁</div>
+      <div class="pillar-label">Secure</div>
+      <p class="pillar-body">Encrypted with vetKeys — cryptographic keys that unlock only at the right time, enforced by smart contract.</p>
+    </div>
+    <div class="pillar">
+      <div class="pillar-icon">◈</div>
+      <div class="pillar-label">Private</div>
+      <p class="pillar-body">Your memories are accessible only when the time is right. Nobody — including us — can open a sealed Canister.</p>
+    </div>
+    <div class="pillar">
+      <div class="pillar-icon">∞</div>
+      <div class="pillar-label">Permanent</div>
+      <p class="pillar-body">Stored permanently on the Internet Computer blockchain. Censorship-resistant. Unstoppable. Forever.</p>
+    </div>
+  </div>
+  <div class="divider"></div>
+  <p class="bc-body">Your data is stored permanently on the blockchain — encrypted, decentralized, and censorship-resistant. It's not controlled by Big Tech or a central authority, meaning you truly own your information. When you send a Canister, you're placing your trust in an unstoppable, transparent system that ensures your memories and digital assets remain safe and accessible only when the time is right.</p>
+</section>
+
+<!-- PRICING -->
+<section class="pricing" id="pricing">
+  <div class="section-center mb3">
+    <div class="eyebrow">Pricing</div>
+    <h2>One-time payment.<br><em>Yours forever.</em></h2>
+  </div>
+  <div class="pricing-grid">
+    <div class="plan">
+      <div class="plan-tier">Starter</div>
+      <div class="plan-price">$20</div>
+      <div class="plan-cadence">one-time · lifetime</div>
+      <ul class="plan-features">
+        <li>1 Canister</li>
+        <li>10MB storage</li>
+        <li>Photos &amp; text</li>
+        <li>Time-locked or permanent</li>
+        <li>Unlock notification</li>
+      </ul>
+      <a href="#" class="btn-ghost" style="font-size:10px; padding:0.65rem 1.1rem;">Get started</a>
+    </div>
+    <div class="plan featured">
+      <div class="plan-badge">Most popular</div>
+      <div class="plan-tier">Premium</div>
+      <div class="plan-price">$100</div>
+      <div class="plan-cadence">one-time · lifetime</div>
+      <ul class="plan-features">
+        <li>1 Canister</li>
+        <li>100MB storage</li>
+        <li>Video &amp; voice notes</li>
+        <li>Multiple recipients</li>
+        <li>Unlock notification</li>
+      </ul>
+      <a href="#" class="btn-primary" style="font-size:10px; padding:0.65rem 1.1rem;">Get started</a>
+    </div>
+    <div class="plan">
+      <div class="plan-tier">Pendant</div>
+      <div class="plan-price">$25</div>
+      <div class="plan-cadence">includes 1 Starter Canister</div>
+      <ul class="plan-features">
+        <li>Engraved stainless steel disc</li>
+        <li>QR code — your Canister key</li>
+        <li>Date engraved on face</li>
+        <li>Message on reverse</li>
+        <li>Keychain or necklace</li>
+      </ul>
+      <a href="#" class="btn-ghost" style="font-size:10px; padding:0.65rem 1.1rem;">Pre-order</a>
+    </div>
+    <div class="plan">
+      <div class="plan-tier">Pendant 3-pack</div>
+      <div class="plan-price">$60</div>
+      <div class="plan-cadence">includes 3 Starter Canisters</div>
+      <ul class="plan-features">
+        <li>3 engraved pendants</li>
+        <li>3 Starter Canisters</li>
+        <li>Each uniquely keyed</li>
+        <li>Perfect for families</li>
+        <li>Gift-ready packaging</li>
+      </ul>
+      <a href="#" class="btn-ghost" style="font-size:10px; padding:0.65rem 1.1rem;">Pre-order</a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div>
+    <a href="#" class="logo">
+      <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="15" stroke="#b8965a" stroke-width="1"/>
+        <circle cx="16" cy="16" r="4.5" fill="#b8965a" opacity="0.85"/>
+        <circle cx="16" cy="16" r="1.8" fill="#0e0e0d"/>
+      </svg>
+      <span class="logo-text" style="font-size:12px;">Canister</span>
+    </a>
+    <p class="footer-copy">Future-proof memories and digital assets.<br>On-chain, forever.</p>
+    <div class="icp-badge"><div class="icp-dot"></div>100% on-chain · Internet Computer · Rust</div>
+  </div>
+  <div class="footer-links">
+    <a href="#">Privacy</a>
+    <a href="#">FAQ</a>
+    <a href="#">Contact</a>
+    <a href="#" style="color: rgba(184,150,90,0.5);">From the makers of DooCoins</a>
+  </div>
+</footer>
+
+</body>
+</html>

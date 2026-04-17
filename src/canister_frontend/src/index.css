@@ -1,0 +1,242 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom display/sans/mono names map to system stacks in tailwind.config.js.
+ * Add real .woff2 files under public/assets/fonts/ and @font-face rules here
+ * if you want embedded webfonts; missing files caused OTS decode errors in dev. */
+
+@layer base {
+  :root {
+    --radius: 0.5rem;
+
+    /* === CANISTER DARK FUTURISTIC THEME === */
+    /* Background: near-black with deep blue tint */
+    --background: 0.08 0.012 264;
+    /* Foreground: near-white */
+    --foreground: 0.94 0.01 264;
+
+    /* Card: slightly elevated dark */
+    --card: 0.12 0.015 264;
+    --card-foreground: 0.94 0.01 264;
+
+    /* Popover */
+    --popover: 0.14 0.018 264;
+    --popover-foreground: 0.94 0.01 264;
+
+    /* Primary: cyan/teal glow accent */
+    --primary: 0.72 0.17 207;
+    --primary-foreground: 0.06 0.012 264;
+
+    /* Secondary: subtle elevated surface */
+    --secondary: 0.16 0.02 264;
+    --secondary-foreground: 0.85 0.01 264;
+
+    /* Muted: dim text */
+    --muted: 0.14 0.015 264;
+    --muted-foreground: 0.55 0.04 264;
+
+    /* Accent: cyan teal */
+    --accent: 0.72 0.17 207;
+    --accent-foreground: 0.06 0.012 264;
+
+    /* Destructive */
+    --destructive: 0.62 0.22 22;
+    --destructive-foreground: 0.98 0 0;
+
+    /* Amber/gold for sealed state */
+    --amber: 0.75 0.18 65;
+    --amber-foreground: 0.08 0.012 264;
+
+    /* Borders */
+    --border: 0.22 0.03 264 / 60%;
+    --input: 0.18 0.025 264 / 60%;
+    --ring: 0.72 0.17 207;
+
+    /* Charts */
+    --chart-1: 0.72 0.17 207;
+    --chart-2: 0.75 0.18 65;
+    --chart-3: 0.62 0.22 22;
+    --chart-4: 0.7 0.15 300;
+    --chart-5: 0.65 0.18 150;
+
+    /* Sidebar */
+    --sidebar: 0.1 0.015 264;
+    --sidebar-foreground: 0.94 0.01 264;
+    --sidebar-primary: 0.72 0.17 207;
+    --sidebar-primary-foreground: 0.06 0.012 264;
+    --sidebar-accent: 0.16 0.02 264;
+    --sidebar-accent-foreground: 0.85 0.01 264;
+    --sidebar-border: 0.22 0.03 264 / 60%;
+    --sidebar-ring: 0.72 0.17 207;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "GeneralSans", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer utilities {
+  /* Glow effects */
+  .glow-cyan {
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.3), 0 0 40px rgba(6, 182, 212, 0.1);
+  }
+  .glow-cyan-lg {
+    box-shadow: 0 0 30px rgba(6, 182, 212, 0.4), 0 0 60px rgba(6, 182, 212, 0.2);
+  }
+  .glow-amber {
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.3), 0 0 40px
+      rgba(245, 158, 11, 0.1);
+  }
+  .glow-amber-lg {
+    box-shadow: 0 0 30px rgba(245, 158, 11, 0.4), 0 0 60px
+      rgba(245, 158, 11, 0.2);
+  }
+  .text-glow-cyan {
+    text-shadow: 0 0 20px rgba(6, 182, 212, 0.6);
+  }
+  .text-glow-amber {
+    text-shadow: 0 0 20px rgba(245, 158, 11, 0.6);
+  }
+
+  /* Grid pattern background */
+  .bg-grid {
+    background-image: linear-gradient(
+        rgba(6, 182, 212, 0.03) 1px,
+        transparent 1px
+      ), linear-gradient(90deg, rgba(6, 182, 212, 0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  /* Scanline effect */
+  .bg-scanlines {
+    background-image: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.05) 2px,
+      rgba(0, 0, 0, 0.05) 4px
+    );
+  }
+
+  /* Animated pulse ring */
+  .pulse-ring::before {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: inherit;
+    border: 1px solid rgba(6, 182, 212, 0.4);
+    animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  .font-display {
+    font-family: "BricolageGrotesque", system-ui, sans-serif;
+  }
+  .font-mono-display {
+    font-family: "GeistMono", monospace;
+  }
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.2;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes seal-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(0.98);
+  }
+}
+
+@keyframes seal-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 30px rgba(6, 182, 212, 0.4), 0 0 60px rgba(6, 182, 212, 0.2),
+      0 0 100px rgba(6, 182, 212, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 60px rgba(6, 182, 212, 0.6), 0 0 100px
+      rgba(6, 182, 212, 0.4), 0 0 150px rgba(6, 182, 212, 0.2);
+  }
+}
+
+@keyframes count-tick {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-4px);
+    opacity: 0.5;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.96);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.animate-seal-pulse {
+  animation: seal-pulse 2s ease-in-out infinite;
+}
+
+.animate-seal-glow {
+  animation: seal-glow 2s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-reveal-in {
+  animation: reveal-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-count-tick {
+  animation: count-tick 0.3s ease-in-out;
+}
