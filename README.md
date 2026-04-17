@@ -1,64 +1,63 @@
 # Canister (ICP Time Capsule)
 
-Canister is an Internet Computer app for creating encrypted time-capsules with a React frontend and Motoko backend.
+Canister is an Internet Computer app for creating encrypted time capsules with a React frontend and a Motoko backend.
 
-## Project Layout
+## What this repo contains
 
-- `src/canister_backend`: Motoko canister (`main.mo` plus authorization/blob-storage mixins)
-- `src/canister_frontend`: Vite + React frontend
-- `docs/Auth.md`: local vs hosted auth and deploy setup
-- `claude/`: PRD and static mockup reference
-- `caffeine/`: original export snapshot used for migration/reference
+- `src/canister_backend`: Motoko canister source (`main.mo` plus authorization/blob-storage mixins)
+- `src/canister_frontend`: Vite + React app
+- `scripts/run-with-dfx.mjs`: wrapper used by local/dev deploy scripts
+- `docs/Auth.md`: Internet Identity setup (local hosted vs `id.ai`) and troubleshooting
+- `caffeine/`: original snapshot/reference app during migration
 
 ## Prerequisites
 
 - Node.js 20+
-- npm 9+ (workspace install/build)
+- npm 9+
 - `dfx` 0.29+
 
-## Local Setup
+## Quick start (local)
 
 ```bash
 npm install
-```
-
-## Frontend Build
-
-```bash
-npm run build
-```
-
-This builds `src/canister_frontend` and copies `env.json` into `dist`.
-
-## DFX Workflow
-
-```bash
 npm run dev:local
 ```
 
-This command will:
+`npm run dev:local` will:
 
-- start the local replica if needed
-- deploy the backend locally
+- start local `dfx` replica if needed
+- deploy local canisters
 - generate `src/canister_frontend/env.json`
-- build and deploy local frontend assets
+- build and deploy frontend assets
 - start the Vite dev server
 
-To deploy to the IC, run:
+## Deploy to IC mainnet
 
 ```bash
 npm run deploy:ic
 ```
 
-Frontend env values are generated into `src/canister_frontend/env.json` for the current deployment target.
+## Useful scripts
 
-Identity defaults used by these scripts:
+- `npm run dev:local`: local replica + local deploy + Vite
+- `npm run deploy:ic`: deploy backend/frontend to IC
+- `npm run build`: build frontend workspace
+
+## Identity defaults
 
 - local (`npm run dev:local`): `kempo`
-- ic (`npm run deploy:ic`): `motoko`
+- IC (`npm run deploy:ic`): `motoko`
 
-You can override them with:
+Override if needed:
 
 - `DFX_LOCAL_IDENTITY=<name> npm run dev:local`
 - `DFX_IC_IDENTITY=<name> npm run deploy:ic`
+
+## Auth and Internet Identity
+
+See `docs/Auth.md` for:
+
+- local Internet Identity pin/version details
+- hosted identity (`https://id.ai`) behavior
+- troubleshooting for common auth/deploy errors
 
