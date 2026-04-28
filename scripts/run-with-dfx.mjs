@@ -1,5 +1,5 @@
 import { execSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -63,6 +63,41 @@ function readDfxEnvVar(name) {
   return rawValue.replace(/^'/, "").replace(/'$/, "");
 }
 
+function syncFrontendDeclarations() {
+  const generatedDir = path.join(repoRoot, "src", "declarations", "canister_backend");
+  const targetDir = path.join(frontendDir, "src", "declarations");
+  const pairs = [
+    ["canister_backend.did.js", "backend.did.js"],
+    ["canister_backend.did.d.ts", "backend.did.d.ts"],
+  ];
+
+  if (!existsSync(generatedDir)) {
+    console.warn(
+      `\nSkipping declarations sync: ${path.relative(repoRoot, generatedDir)} not found.`,
+    );
+    return;
+  }
+
+  if (!existsSync(targetDir)) {
+    mkdirSync(targetDir, { recursive: true });
+  }
+
+  for (const [source, dest] of pairs) {
+    const sourcePath = path.join(generatedDir, source);
+    const destPath = path.join(targetDir, dest);
+    if (!existsSync(sourcePath)) {
+      console.warn(
+        `\nSkipping ${source}: not found at ${path.relative(repoRoot, sourcePath)}.`,
+      );
+      continue;
+    }
+    copyFileSync(sourcePath, destPath);
+    console.log(
+      `Synced ${path.relative(repoRoot, sourcePath)} -> ${path.relative(repoRoot, destPath)}`,
+    );
+  }
+}
+
 function writeFrontendEnv({ backendHost, backendCanisterId }) {
   const envJson = {
     backend_host: backendHost ?? "undefined",
@@ -106,6 +141,8 @@ if (!backendCanisterId) {
     "Unable to resolve CANISTER_ID_CANISTER_BACKEND from .env after dfx deploy.",
   );
 }
+
+syncFrontendDeclarations();
 
 writeFrontendEnv({
   backendHost: isLocal ? "http://127.0.0.1:4943" : undefined,

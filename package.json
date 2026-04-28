@@ -7,7 +7,9 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "deploy:ic": "node scripts/run-with-dfx.mjs ic",
+    "dev:all": "node scripts/dev-all.mjs",
     "dev:local": "node scripts/run-with-dfx.mjs local",
+    "payments:relay": "node services/payments-relay/server.mjs",
     "prebuild": "npm run prebuild --workspaces --if-present",
     "pretest": "npm run prebuild --workspaces --if-present",
     "start": "npm start --workspaces --if-present",
@@ -16,5 +18,17 @@
   "type": "module",
   "workspaces": [
     "src/canister_frontend"
-  ]
+  ],
+  "dependencies": {
+    "@dfinity/agent": "^3.4.1",
+    "@dfinity/candid": "^3.4.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "stripe": "^18.3.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "wait-on": "^9.0.5"
+  }
 }

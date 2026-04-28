@@ -208,13 +208,13 @@ export default function Dashboard() {
           <div className="space-y-4" data-ocid="dashboard.list">
             {capsules.map((capsule: CapsuleMetadata, i) => (
               <CapsuleCard
-                key={capsule.id.toString()}
+                key={capsule.id}
                 capsule={capsule}
                 index={i}
                 onClick={() =>
                   navigate({
                     to: "/claim/$id",
-                    params: { id: capsule.id.toString() },
+                    params: { id: capsule.id },
                   })
                 }
               />

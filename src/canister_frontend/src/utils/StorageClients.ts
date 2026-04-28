@@ -18,6 +18,22 @@ const DOMAIN_SEPARATOR_FOR_METADATA = new TextEncoder().encode(
 );
 const DOMAIN_SEPARATOR_FOR_NODES = new TextEncoder().encode("ynode/");
 
+function mapBlobTreeUploadError(errorText: string): string | null {
+  const normalized = errorText.toLowerCase();
+  const isCertificateVerificationFailure =
+    normalized.includes("signatureverificationfailed") ||
+    normalized.includes("failed to verify certificate");
+
+  if (!isCertificateVerificationFailure) {
+    return null;
+  }
+
+  return (
+    "Storage gateway rejected the upload certificate. This usually means your backend and blob gateway are on different networks. " +
+    "Use local backend + local gateway together, or IC backend + hosted gateway together."
+  );
+}
+
 // Utility function for exponential backoff retry logic - retries on network/server errors only
 async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
   let lastError: Error | undefined;
@@ -457,8 +473,9 @@ class StorageGatewayClient {
 
       if (!response.ok) {
         const errorText = await response.text();
+        const hint = mapBlobTreeUploadError(errorText);
         const error = new Error(
-          `Failed to upload blob tree: ${response.status} ${response.statusText} - ${errorText}`,
+          `Failed to upload blob tree: ${response.status} ${response.statusText} - ${errorText}${hint ? `\n${hint}` : ""}`,
         );
         // Add response status for retry logic
         (error as any).response = { status: response.status };
@@ -489,7 +506,6 @@ export class StorageClient {
     });
     const respone = result.response.body;
     if (isV3ResponseBody(respone)) {
-      console.log("Certificate:", respone.certificate);
       return respone.certificate;
     }
     throw new Error("Expected v3 response body");

@@ -1,9 +1,19 @@
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useParams } from "@tanstack/react-router";
 import { AlertTriangle, Clock, Download, Lock, Unlock } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { ExternalBlob } from "../backend";
+import { useActor } from "../hooks/useActor";
 import {
   useGetCapsuleContent,
   useGetCapsuleMetadata,
@@ -78,11 +88,13 @@ function CountdownUnit({ value, label }: { value: number; label: string }) {
 }
 
 function FileRefItem({
-  blob,
+  fileId,
   index,
+  onDownload,
 }: {
-  blob: ExternalBlob;
+  fileId: string;
   index: number;
+  onDownload: (fileId: string) => Promise<void>;
 }) {
   const ocid = `claim.item.${index + 1}` as const;
   const btnOcid = "claim.secondary_button" as const;
@@ -92,32 +104,33 @@ function FileRefItem({
       data-ocid={ocid}
     >
       <span className="text-sm text-foreground">File {index + 1}</span>
-      <a
-        href={blob.getDirectURL()}
-        download
-        target="_blank"
-        rel="noopener noreferrer"
+      <Button
+        size="sm"
+        variant="outline"
+        className="border-primary/30 text-primary hover:bg-primary/10"
+        onClick={() => {
+          void onDownload(fileId);
+        }}
         data-ocid={btnOcid}
       >
-        <Button
-          size="sm"
-          variant="outline"
-          className="border-primary/30 text-primary hover:bg-primary/10"
-        >
-          <Download className="w-3 h-3 mr-1.5" />
-          Download
-        </Button>
-      </a>
+        <Download className="w-3 h-3 mr-1.5" />
+        Download
+      </Button>
     </div>
   );
 }
 
 export default function ClaimPage() {
   const { id } = useParams({ from: "/claim/$id" });
-  const capsuleId = BigInt(id);
+  const capsuleId = id;
+  const { actor } = useActor();
 
-  // Extract key from URL hash
-  const [decryptKey] = useState<string>(() => window.location.hash.slice(1));
+  // Extract key from URL hash, with in-memory fallback from manual entry.
+  const [decryptKey, setDecryptKey] = useState<string>(() =>
+    window.location.hash.slice(1),
+  );
+  const [isKeyDialogOpen, setIsKeyDialogOpen] = useState(false);
+  const [manualKeyInput, setManualKeyInput] = useState("");
 
   const {
     data: metadata,
@@ -135,6 +148,86 @@ export default function ClaimPage() {
   const [decryptedMessage, setDecryptedMessage] = useState<string | null>(null);
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [isDecrypting, setIsDecrypting] = useState(false);
+  const [fileIds, setFileIds] = useState<string[]>([]);
+  const hasUnlockedWithKey = Boolean(decryptedMessage);
+  const displayCountdown = isUnlocked
+    ? { days: 0, hours: 0, minutes: 0, seconds: 0 }
+    : countdown;
+
+  const submitManualKey = () => {
+    const trimmed = manualKeyInput.trim();
+    if (!trimmed) {
+      setDecryptError("Please paste a decryption key to continue.");
+      return;
+    }
+    setDecryptKey(trimmed);
+    setDecryptedMessage(null);
+    setDecryptError(null);
+    setIsKeyDialogOpen(false);
+  };
+  const unlockDialog = (
+    <Dialog open={isKeyDialogOpen} onOpenChange={setIsKeyDialogOpen}>
+      <DialogContent className="bg-card border border-primary/40 text-foreground shadow-2xl">
+        <DialogHeader>
+          <DialogTitle className="font-display text-2xl">
+            Unlock with decryption key
+          </DialogTitle>
+          <DialogDescription>
+            Paste the decryption key shared with your claim link. The key stays
+            in memory for this page session only.
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          value={manualKeyInput}
+          onChange={(event) => setManualKeyInput(event.target.value)}
+          placeholder="Paste decryption key"
+          className="bg-secondary/50 border-border/60"
+          data-ocid="claim.input"
+        />
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => setIsKeyDialogOpen(false)}
+            data-ocid="claim.secondary_button"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={submitManualKey}
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
+            data-ocid="claim.primary_button"
+          >
+            Unlock
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
+  const downloadFile = useCallback(
+    async (fileId: string) => {
+      if (!hasUnlockedWithKey) {
+        return;
+      }
+      if (!actor) {
+        throw new Error("Not connected");
+      }
+      const file = await actor.getCapsuleFile(capsuleId, fileId);
+      const data = file.data as Uint8Array;
+      const mimeType = file.mimeType || "application/octet-stream";
+      const name = file.name || `file-${fileId}`;
+      const blob = new Blob([data], { type: mimeType });
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    },
+    [actor, capsuleId, hasUnlockedWithKey],
+  );
 
   // Countdown timer
   useEffect(() => {
@@ -168,6 +261,31 @@ export default function ClaimPage() {
     }
   }, [content, decryptKey, decryptedMessage, decryptError, decrypt]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const decodeFileIds = async () => {
+      if (!content) {
+        if (!cancelled) {
+          setFileIds([]);
+        }
+        return;
+      }
+      const decoded = await Promise.all(
+        content.fileRefs.map(async (blob: ExternalBlob) =>
+          new TextDecoder().decode(await blob.getBytes()),
+        ),
+      );
+      if (!cancelled) {
+        setFileIds(decoded.filter((idValue) => idValue.length > 0));
+      }
+    };
+
+    void decodeFileIds();
+    return () => {
+      cancelled = true;
+    };
+  }, [content]);
+
   // ── Loading ──
   if (metaLoading) {
     return (
@@ -176,6 +294,7 @@ export default function ClaimPage() {
           <div className="w-16 h-16 rounded-full border-2 border-primary/30 border-t-primary animate-spin mx-auto mb-6" />
           <p className="text-muted-foreground">Loading canister...</p>
         </div>
+        {unlockDialog}
       </main>
     );
   }
@@ -200,8 +319,8 @@ export default function ClaimPage() {
     );
   }
 
-  // ── LOCKED STATE ──
-  if (!isUnlocked) {
+  // ── TIMER STATE (before unlock or awaiting key/decrypt) ──
+  if (!hasUnlockedWithKey) {
     return (
       <main className="min-h-screen flex flex-col items-center justify-center pt-16 px-4 py-12">
         <div className="max-w-lg w-full text-center" data-ocid="claim.panel">
@@ -243,12 +362,14 @@ export default function ClaimPage() {
           >
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-amber/30 bg-amber/10 text-amber text-xs font-mono-display font-medium mb-6">
               <span className="w-1.5 h-1.5 rounded-full bg-amber animate-pulse" />
-              SEALED · BLOCKCHAIN ENFORCED
+              {isUnlocked ? "TIME REACHED · KEY REQUIRED" : "SEALED · BLOCKCHAIN ENFORCED"}
             </div>
 
             <h1 className="font-display text-4xl md:text-5xl font-bold text-foreground mb-4">
               This Canister is{" "}
-              <span className="text-amber text-glow-amber">Locked</span>
+              <span className="text-amber text-glow-amber">
+                {isUnlocked ? "Ready" : "Locked"}
+              </span>
             </h1>
 
             <p className="text-muted-foreground mb-3">
@@ -257,15 +378,21 @@ export default function ClaimPage() {
               </span>
             </p>
 
-            <p className="text-sm text-muted-foreground mb-10">
-              Sealed and waiting. Unlocks on{" "}
-              <span className="text-amber font-medium">
-                {formatDate(metadata.unlockDate)}
-              </span>
-            </p>
+            {isUnlocked ? (
+              <p className="text-sm text-muted-foreground mb-10">
+                Unlock time reached. Enter the decryption key to view content.
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground mb-10">
+                Sealed and waiting. Unlocks on{" "}
+                <span className="text-amber font-medium">
+                  {formatDate(metadata.unlockDate)}
+                </span>
+              </p>
+            )}
 
             {/* Countdown */}
-            {countdown && (
+            {displayCountdown && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -277,15 +404,32 @@ export default function ClaimPage() {
                   Time Remaining
                 </p>
                 <div className="flex items-center justify-center gap-3">
-                  <CountdownUnit value={countdown.days} label="Days" />
+                  <CountdownUnit value={displayCountdown.days} label="Days" />
                   <span className="text-amber text-3xl font-bold pb-6">:</span>
-                  <CountdownUnit value={countdown.hours} label="Hours" />
+                  <CountdownUnit value={displayCountdown.hours} label="Hours" />
                   <span className="text-amber text-3xl font-bold pb-6">:</span>
-                  <CountdownUnit value={countdown.minutes} label="Min" />
+                  <CountdownUnit value={displayCountdown.minutes} label="Min" />
                   <span className="text-amber text-3xl font-bold pb-6">:</span>
-                  <CountdownUnit value={countdown.seconds} label="Sec" />
+                  <CountdownUnit value={displayCountdown.seconds} label="Sec" />
                 </div>
               </motion.div>
+            )}
+
+            {isUnlocked && !isDecrypting && (
+              <div className="mb-10 flex justify-center">
+                <Button
+                  variant="outline"
+                  className="border-primary/30 text-primary hover:bg-primary/10"
+                  onClick={() => setIsKeyDialogOpen(true)}
+                  data-ocid="claim.secondary_button"
+                >
+                  Unlock with key
+                </Button>
+              </div>
+            )}
+
+            {decryptError && (
+              <p className="text-destructive text-sm mb-6">{decryptError}</p>
             )}
 
             <p className="text-xs text-muted-foreground border-t border-border/30 pt-6">
@@ -296,11 +440,12 @@ export default function ClaimPage() {
             </p>
           </motion.div>
         </div>
+        {unlockDialog}
       </main>
     );
   }
 
-  // ── UNLOCKED STATE ──
+  // ── DECRYPTED CONTENT STATE ──
   return (
     <main className="min-h-screen pt-24 pb-16 px-4">
       <div className="container mx-auto max-w-2xl">
@@ -350,23 +495,6 @@ export default function ClaimPage() {
                   : "Loading content..."}
               </p>
             </motion.div>
-          ) : decryptError ? (
-            <motion.div
-              key="error"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="p-6 rounded-sm border border-destructive/30 bg-destructive/10 text-center"
-              data-ocid="claim.error_state"
-            >
-              <AlertTriangle className="w-8 h-8 text-destructive mx-auto mb-3" />
-              <p className="text-destructive text-sm">{decryptError}</p>
-              {!decryptKey && (
-                <p className="text-muted-foreground text-xs mt-2">
-                  The claim link must include the decryption key after the #
-                  symbol.
-                </p>
-              )}
-            </motion.div>
           ) : (
             <motion.div
               key="content"
@@ -393,21 +521,8 @@ export default function ClaimPage() {
                 </motion.div>
               )}
 
-              {/* No key — show notice */}
-              {!decryptKey && content && (
-                <div
-                  className="p-6 rounded-sm border border-amber/20 bg-amber/5"
-                  data-ocid="claim.panel"
-                >
-                  <p className="text-sm text-amber">
-                    ⚠ No decryption key found in the URL. The message cannot be
-                    displayed. Ensure you're using the full claim link.
-                  </p>
-                </div>
-              )}
-
               {/* Files */}
-              {content && content.fileRefs.length > 0 && (
+              {content && hasUnlockedWithKey && fileIds.length > 0 && (
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -415,14 +530,15 @@ export default function ClaimPage() {
                   className="p-6 rounded-sm border border-border/60 bg-card/80"
                 >
                   <p className="text-xs text-muted-foreground uppercase tracking-wider mb-4">
-                    Attached Files ({content.fileRefs.length})
+                    Attached Files ({fileIds.length})
                   </p>
                   <div className="space-y-2">
-                    {content.fileRefs.map((blob: ExternalBlob, i: number) => (
+                    {fileIds.map((fileId: string, i: number) => (
                       <FileRefItem
-                        key={blob.getDirectURL()}
-                        blob={blob}
+                        key={fileId}
+                        fileId={fileId}
                         index={i}
+                        onDownload={downloadFile}
                       />
                     ))}
                   </div>
@@ -432,6 +548,7 @@ export default function ClaimPage() {
           )}
         </AnimatePresence>
       </div>
+      {unlockDialog}
     </main>
   );
 }

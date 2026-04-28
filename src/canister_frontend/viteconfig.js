@@ -18,6 +18,9 @@ process.env.II_URL = process.env.II_URL || ii_url;
 // doesn't error; the auth client will treat "undefined" as unset.
 process.env.DERIVATION_ORIGIN =
   process.env.DERIVATION_ORIGIN || "undefined";
+// Expected pairings:
+// - Local development: DFX local backend + local STORAGE_GATEWAY_URL.
+// - IC/production: IC backend + hosted STORAGE_GATEWAY_URL (default below).
 process.env.STORAGE_GATEWAY_URL =
   process.env.STORAGE_GATEWAY_URL || "https://blob.caffeine.ai";
 

@@ -15,7 +15,7 @@ export class ExternalBlob {
     withUploadProgress(onProgress: (percentage: number) => void): ExternalBlob;
 }
 export type Time = bigint;
-export type CapsuleId = bigint;
+export type CapsuleId = string;
 export interface CapsuleMetadata {
     id: CapsuleId;
     unlockDate: Time;
@@ -23,6 +23,7 @@ export interface CapsuleMetadata {
     creator: Principal;
     createdDate: Time;
     isUnlocked: boolean;
+    planTier: "free" | "signature" | "legacy";
 }
 export interface UserProfile {
     name: string;
@@ -34,17 +35,27 @@ export enum UserRole {
 }
 export interface backendInterface {
     assignCallerUserRole(user: Principal, role: UserRole): Promise<void>;
-    createCapsule(title: string, encryptedMessage: string, fileRefs: Array<ExternalBlob>, unlockDate: Time): Promise<CapsuleId>;
+    createCapsule(publicId: string, title: string, encryptedMessage: string, fileRefs: Array<ExternalBlob>, unlockDate: Time, messageCharCount: bigint, paymentIntentId: Array<string>): Promise<CapsuleId>;
+    createPaymentIntent(tier: { free?: null; signature?: null; legacy?: null }, paymentMethod: { card?: null; crypto?: null; voucher?: null }): Promise<any>;
+    getPaymentIntentStatus(intentId: string): Promise<any>;
+    confirmPaymentIntent(intentId: string, providerPaymentId: string, targetStatus: { pending?: null; confirmed?: null; failed?: null; expired?: null; refunded?: null }, webhookSecret: string): Promise<any>;
+    getPricingPlans(): Promise<any[]>;
     getCallerUserProfile(): Promise<UserProfile | null>;
     getCallerUserRole(): Promise<UserRole>;
-    getCapsuleContent(id: CapsuleId): Promise<{
+    getCapsuleContent(id: string): Promise<{
         fileRefs: Array<ExternalBlob>;
         encryptedMessage: string;
     }>;
-    getCapsuleMetadata(id: CapsuleId): Promise<CapsuleMetadata>;
+    getCapsuleFile(capsuleId: string, fileId: string): Promise<{
+        name: string;
+        mimeType: string;
+        data: Uint8Array<ArrayBuffer>;
+    }>;
+    getCapsuleMetadata(id: string): Promise<CapsuleMetadata>;
     getMyCapsules(): Promise<Array<CapsuleMetadata>>;
     getTotalCapsuleCount(): Promise<bigint>;
     getUserProfile(user: Principal): Promise<UserProfile | null>;
     isCallerAdmin(): Promise<boolean>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
+    uploadCapsuleFile(name: string, mimeType: string, data: Uint8Array<ArrayBuffer>): Promise<string>;
 }
