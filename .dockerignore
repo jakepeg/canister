@@ -1,0 +1,11 @@
+.git
+.dfx
+node_modules
+**/node_modules
+**/dist
+.env
+.env.*
+!.env.example
+tmp
+*.log
+src/canister_frontend

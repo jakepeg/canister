@@ -16,6 +16,17 @@ const frontendEnvPath = path.join(frontendDir, "env.json");
 const dfxEnvPath = path.join(repoRoot, ".env");
 const isLocal = mode === "local";
 const networkArgs = isLocal ? [] : ["--network", "ic"];
+
+if (isLocal) {
+  let dfxStopOnce = false;
+  const stopDfxOnSignal = () => {
+    if (dfxStopOnce) return;
+    dfxStopOnce = true;
+    tryRun("dfx", ["stop"]);
+  };
+  process.on("SIGINT", stopDfxOnSignal);
+  process.on("SIGTERM", stopDfxOnSignal);
+}
 const localIdentity = process.env.DFX_LOCAL_IDENTITY || "kempo";
 const icIdentity = process.env.DFX_IC_IDENTITY || "motoko";
 const selectedIdentity = isLocal ? localIdentity : icIdentity;
@@ -45,12 +56,63 @@ function tryRun(command, args) {
     execSync([command, ...args].join(" "), {
       cwd: repoRoot,
       stdio: "ignore",
-      env: process.env,
+      env: {
+        ...process.env,
+        ...(isLocal && command === "dfx" ? { DFX_NETWORK: process.env.DFX_NETWORK ?? "local" } : {}),
+      },
     });
     return true;
   } catch {
     return false;
   }
+}
+
+function sleepSecondsSync(seconds) {
+  try {
+    execSync(`sleep ${seconds}`, { stdio: "ignore" });
+  } catch {
+    const end = Date.now() + seconds * 1000;
+    while (Date.now() < end) {
+      /* last resort without sleep binary */
+    }
+  }
+}
+
+/** Ensure local replica responds to `dfx ping`; recover from orphan pocket-ic after abrupt stops. */
+function ensureLocalReplica() {
+  if (!isLocal) return;
+  if (tryRun("dfx", ["ping"])) return;
+  console.warn(
+    "\nLocal replica not responding to `dfx ping`. Recovering: dfx stop, clearing stray pocket-ic, dfx start --clean --background...",
+  );
+  tryRun("dfx", ["stop"]);
+  try {
+    execSync("pkill -f 'pocket-ic.*pocketic-tmp-port' || true", {
+      cwd: repoRoot,
+      stdio: "ignore",
+      shell: true,
+      env: { ...process.env, DFX_NETWORK: "local" },
+    });
+  } catch {
+    /* ignore */
+  }
+  run("dfx", ["start", "--clean", "--background"]);
+  for (let i = 0; i < 90; i += 1) {
+    if (tryRun("dfx", ["ping"])) return;
+    sleepSecondsSync(1);
+  }
+  throw new Error("Local replica did not become ready after `dfx start --clean`. Check dfx logs.");
+}
+
+if (isLocal) {
+  let dfxStopOnce = false;
+  const stopDfxOnSignal = () => {
+    if (dfxStopOnce) return;
+    dfxStopOnce = true;
+    tryRun("dfx", ["stop"]);
+  };
+  process.on("SIGINT", stopDfxOnSignal);
+  process.on("SIGTERM", stopDfxOnSignal);
 }
 
 function readDfxEnvVar(name) {
@@ -110,8 +172,8 @@ function writeFrontendEnv({ backendHost, backendCanisterId }) {
   console.log(`\nWrote ${path.relative(repoRoot, frontendEnvPath)}`);
 }
 
-if (isLocal && !tryRun("dfx", ["ping"])) {
-  run("dfx", ["start", "--background"]);
+if (isLocal) {
+  ensureLocalReplica();
 }
 
 if (isLocal) {
@@ -148,6 +210,29 @@ writeFrontendEnv({
   backendHost: isLocal ? "http://127.0.0.1:4943" : undefined,
   backendCanisterId,
 });
+
+// Local backend deploys wipe transient access-control state, so the Stripe
+// webhook secret has to be re-seeded after every deploy. Run the idempotent
+// bootstrap + voucher seed so a fresh dev cycle never lands on an
+// unconfigured canister or empty voucher campaigns.
+if (isLocal) {
+  try {
+    run("node", ["scripts/bootstrap-payments.mjs"]);
+  } catch (error) {
+    console.warn(
+      "\nPayments bootstrap failed. The Stripe webhook handler will reject events with 503 until you run `npm run payments:bootstrap` manually.",
+    );
+    if (error instanceof Error) console.warn(error.message);
+  }
+  try {
+    run("node", ["scripts/seed-local-vouchers.mjs"]);
+  } catch (error) {
+    console.warn(
+      "\nVoucher seeding failed. Run `npm run vouchers:seed:local` manually to populate test campaigns.",
+    );
+    if (error instanceof Error) console.warn(error.message);
+  }
+}
 
 run("npm", ["run", "build", "--workspace", "src/canister_frontend"]);
 

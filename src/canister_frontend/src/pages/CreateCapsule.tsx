@@ -1,4 +1,11 @@
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import {
   Dialog,
   DialogContent,
@@ -30,19 +37,22 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ExternalBlob } from "../backend";
 import QRCode from "../components/QRCode";
-import StripeCardForm from "../components/StripeCardForm";
 import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
+import { trackEvent } from "../lib/analytics";
 import {
-  FALLBACK_PRICING_PLANS,
   useCreateCapsule,
-  useCreateStripeClientSecret,
+  usePaymentNotificationPreferences,
+  useSavePaymentNotificationPreferences,
   useCreatePaymentIntent,
   usePaymentIntentStatus,
   usePricingPlans,
   type PaymentMethod,
   type PlanTier,
+  type ReminderTarget,
 } from "../hooks/useQueries";
+import { buildStripePaymentLinkUrl } from "../lib/stripeLinks";
+import { useRedeemVoucherCode } from "../hooks/useVoucherCampaigns";
 
 const STEPS = [
   { id: 1, label: "Plan", icon: <Gem className="w-4 h-4" /> },
@@ -95,7 +105,8 @@ export default function CreateCapsule() {
   const createCapsule = useCreateCapsule();
   const pricingPlans = usePricingPlans();
   const createPaymentIntent = useCreatePaymentIntent();
-  const createStripeClientSecret = useCreateStripeClientSecret();
+  const savePaymentNotificationPreferences = useSavePaymentNotificationPreferences();
+  const redeemVoucherCode = useRedeemVoucherCode();
 
   const [step, setStep] = useState(1);
   const [title, setTitle] = useState("");
@@ -105,9 +116,23 @@ export default function CreateCapsule() {
   const [selectedPlan, setSelectedPlan] = useState<PlanTier | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("card");
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
+  const [voucherCode, setVoucherCode] = useState("");
   const paymentIntentStatus = usePaymentIntentStatus(paymentIntentId);
-  const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null);
+  const paymentNotificationPreferences = usePaymentNotificationPreferences(paymentIntentId);
   const [isDragging, setIsDragging] = useState(false);
+  const [ownerEmail, setOwnerEmail] = useState("");
+  const [reminderTarget, setReminderTarget] = useState<ReminderTarget>("owner");
+  const [recipientEmail, setRecipientEmail] = useState("");
+  const [reminderOptIn, setReminderOptIn] = useState(true);
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
+  const [notifyRecipientOnCreation, setNotifyRecipientOnCreation] = useState(true);
+  const [hasRecipientPermission, setHasRecipientPermission] = useState(false);
+  const [preferencesHydratedForIntent, setPreferencesHydratedForIntent] = useState<string | null>(
+    null,
+  );
+  const [creationNoticeTriggeredForIntent, setCreationNoticeTriggeredForIntent] = useState<
+    string | null
+  >(null);
 
   const [isSealing, setIsSealing] = useState(false);
   const [sealingStage, setSealingStage] = useState(0);
@@ -115,20 +140,27 @@ export default function CreateCapsule() {
   const [claimUrl, setClaimUrl] = useState("");
   const [claimKey, setClaimKey] = useState("");
   const lastPaymentStatusRef = useRef<string | null>(null);
-  const hasAutoAdvancedForIntentRef = useRef<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadsDisabled = selectedPlan === "free";
 
   useEffect(() => {
+    trackEvent("capsule_create_started", {
+      entry_point: "direct",
+    });
     const searchParams = new URLSearchParams(window.location.search);
     const preselectedPlan = searchParams.get("plan");
+    const prefilledVoucher = searchParams.get("voucher");
     if (preselectedPlan === "signature") {
       setSelectedPlan("signature");
     } else if (preselectedPlan === "legacy") {
       setSelectedPlan("legacy");
     } else if (preselectedPlan === "free") {
       setSelectedPlan("free");
+    }
+    if (prefilledVoucher) {
+      setVoucherCode(prefilledVoucher.toUpperCase());
+      setPaymentMethod("voucher");
     }
   }, []);
 
@@ -137,10 +169,36 @@ export default function CreateCapsule() {
       setFiles([]);
     }
     setPaymentIntentId(null);
-    setStripeClientSecret(null);
     lastPaymentStatusRef.current = null;
-    hasAutoAdvancedForIntentRef.current = null;
+    setOwnerEmail("");
+    setReminderTarget("owner");
+    setRecipientEmail("");
+    setReminderOptIn(true);
+    setMarketingOptIn(false);
+    setNotifyRecipientOnCreation(true);
+    setHasRecipientPermission(false);
+    setPreferencesHydratedForIntent(null);
+    setCreationNoticeTriggeredForIntent(null);
+    setVoucherCode("");
   }, [selectedPlan]);
+
+  useEffect(() => {
+    if (!requiresPayment) return;
+    setPaymentIntentId(null);
+    lastPaymentStatusRef.current = null;
+    setOwnerEmail("");
+    setReminderTarget("owner");
+    setRecipientEmail("");
+    setReminderOptIn(true);
+    setMarketingOptIn(false);
+    setNotifyRecipientOnCreation(true);
+    setHasRecipientPermission(false);
+    setPreferencesHydratedForIntent(null);
+    setCreationNoticeTriggeredForIntent(null);
+    if (paymentMethod !== "voucher") {
+      setVoucherCode("");
+    }
+  }, [paymentMethod]);
 
   const needsAuth = !identity;
 
@@ -200,11 +258,20 @@ export default function CreateCapsule() {
   }
 
   function canAdvance() {
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const ownerEmailValid = emailPattern.test(ownerEmail.trim());
+    const recipientEmailValid = emailPattern.test(recipientEmail.trim());
+    const stepOneValid = !requiresPayment || (isPaymentConfirmed && ownerEmailValid);
+    const scheduleReminderValid =
+      !requiresPayment ||
+      reminderTarget === "owner" ||
+      !reminderOptIn ||
+      (recipientEmailValid && hasRecipientPermission);
     if (step === 1)
-      return selectedPlan !== null && (selectedPlan === "free" || isPaymentConfirmed);
+      return selectedPlan !== null && (selectedPlan === "free" || stepOneValid);
     if (step === 2) return title.trim().length > 0 && message.trim().length > 0;
     if (step === 3) return true;
-    if (step === 4) return !!unlockDate && new Date(unlockDate) > new Date();
+    if (step === 4) return !!unlockDate && new Date(unlockDate) > new Date() && scheduleReminderValid;
     return true;
   }
 
@@ -217,6 +284,13 @@ export default function CreateCapsule() {
 
   async function handleSeal() {
     if (!identity) return;
+    trackEvent("capsule_seal_submitted", {
+      plan_tier: selectedPlan ?? "unknown",
+      has_payment_intent: Boolean(paymentIntentId),
+      file_count: files.length,
+      message_char_count: message.length,
+      unlock_delay_days: daysUntil ?? undefined,
+    });
     setIsSealing(true);
     setSealingStage(0);
 
@@ -262,11 +336,25 @@ export default function CreateCapsule() {
       const url = `${window.location.origin}/claim/${capsuleId}#${keyBase64}`;
       setClaimUrl(url);
       setClaimKey(keyBase64);
+      trackEvent("capsule_created", {
+        capsule_id: capsuleId,
+        plan_tier: selectedPlan ?? "unknown",
+        file_count: files.length,
+        total_file_size_bytes: totalFileSize,
+        message_char_count: message.length,
+        unlock_date_unix_ms: unlockDateObj?.getTime(),
+        payment_intent_id: paymentIntentId ?? null,
+      });
 
       await new Promise((r) => setTimeout(r, 800));
       setIsSealing(false);
       setSealed(true);
     } catch (err) {
+      trackEvent("capsule_create_failed", {
+        stage: SEALING_STAGES[sealingStage] ?? "unknown",
+        error_message: err instanceof Error ? err.message : "Failed to seal canister",
+        plan_tier: selectedPlan ?? "unknown",
+      });
       setIsSealing(false);
       toast.error(
         err instanceof Error ? err.message : "Failed to seal canister",
@@ -315,17 +403,34 @@ export default function CreateCapsule() {
     toast.success("Recovery key file downloaded.");
   }
 
-  const plans = pricingPlans.data ?? FALLBACK_PRICING_PLANS;
-  const usingPricingFallback =
-    !!pricingPlans.error ||
-    !pricingPlans.data ||
-    pricingPlans.data.length === 0;
+  const plans = pricingPlans.data ?? [];
+  const usingPricingFallback = !pricingPlans.isPending && plans.length === 0;
   const selectedPlanDetails =
     selectedPlan === null ? undefined : plans.find((p) => p.tier === selectedPlan);
+  useEffect(() => {
+    if (!selectedPlan) return;
+    trackEvent("capsule_plan_selected", {
+      plan_tier: selectedPlan,
+      price_usd_cents: selectedPlanDetails
+        ? Number(selectedPlanDetails.amountUsdCents)
+        : undefined,
+    });
+  }, [selectedPlan, selectedPlanDetails]);
+
   const requiresPayment = selectedPlan !== null && selectedPlan !== "free";
+  const isPaymentInitializing = createPaymentIntent.isPending;
   const isPaymentConfirmed = paymentIntentStatus.data?.status === "confirmed";
+  const isSavingContactPreferences = savePaymentNotificationPreferences.isPending;
+  const stripePaymentLinkUrl =
+    requiresPayment && paymentMethod === "card" && paymentIntentId && selectedPlan
+      ? buildStripePaymentLinkUrl(selectedPlan, paymentIntentId)
+      : null;
+  const stripePaymentLinkMissing =
+    requiresPayment && paymentMethod === "card" && !!paymentIntentId && !stripePaymentLinkUrl;
+
   async function initializePaidPayment() {
     if (!requiresPayment) return;
+    if (paymentMethod !== "card") return;
 
     const intent = await createPaymentIntent.mutateAsync({
       tier: selectedPlan ?? "free",
@@ -333,16 +438,27 @@ export default function CreateCapsule() {
     });
     setPaymentIntentId(intent.id);
 
-    if (intent.provider === "stripe") {
-      const stripeIntent = await createStripeClientSecret.mutateAsync({
-        intentId: intent.id,
-        amountUsdCents: intent.amountUsdCents,
-        planName: selectedPlanDetails?.name ?? selectedPlan ?? "Selected plan",
-      });
-      setStripeClientSecret(stripeIntent.clientSecret);
-    } else {
-      throw new Error("Only card checkout is supported in this flow.");
+    if (intent.provider !== "stripe") {
+      throw new Error("Unexpected provider for card checkout.");
     }
+  }
+
+  async function handleRedeemVoucher() {
+    if (!selectedPlan || selectedPlan === "free") return;
+    if (!voucherCode.trim()) {
+      toast.error("Enter a voucher code.");
+      return;
+    }
+    const tier = selectedPlan === "legacy" ? "legacy" : "signature";
+    const result = await redeemVoucherCode.mutateAsync({
+      code: voucherCode.trim(),
+      tier,
+    });
+    setPaymentIntentId(result.id);
+    if (result.ownerEmail) {
+      setOwnerEmail((current) => current || result.ownerEmail || "");
+    }
+    toast.success("Voucher redeemed. Confirm contact preferences to continue.");
   }
 
   useEffect(() => {
@@ -351,8 +467,7 @@ export default function CreateCapsule() {
       !requiresPayment ||
       paymentMethod !== "card" ||
       paymentIntentId ||
-      createPaymentIntent.isPending ||
-      createStripeClientSecret.isPending
+      isPaymentInitializing
     ) {
       return;
     }
@@ -366,16 +481,42 @@ export default function CreateCapsule() {
     paymentMethod,
     paymentIntentId,
     selectedPlan,
-    createPaymentIntent.isPending,
-    createStripeClientSecret.isPending,
+    isPaymentInitializing,
   ]);
 
   useEffect(() => {
     if (!paymentIntentId) {
       lastPaymentStatusRef.current = null;
-      hasAutoAdvancedForIntentRef.current = null;
+      setPreferencesHydratedForIntent(null);
+      setCreationNoticeTriggeredForIntent(null);
     }
   }, [paymentIntentId]);
+
+  useEffect(() => {
+    if (!paymentIntentId || preferencesHydratedForIntent === paymentIntentId) return;
+    const savedPrefs = paymentNotificationPreferences.data;
+    if (savedPrefs) {
+      setOwnerEmail(savedPrefs.ownerEmail ?? "");
+      setReminderTarget(savedPrefs.reminderTarget);
+      setRecipientEmail(savedPrefs.recipientEmail ?? "");
+      setReminderOptIn(savedPrefs.reminderOptIn);
+      setMarketingOptIn(savedPrefs.marketingOptIn);
+      setNotifyRecipientOnCreation(savedPrefs.notifyRecipientOnCreation);
+      setHasRecipientPermission(savedPrefs.hasRecipientPermission);
+      setPreferencesHydratedForIntent(paymentIntentId);
+      return;
+    }
+    const statusOwnerEmail = paymentIntentStatus.data?.ownerEmail ?? "";
+    if (statusOwnerEmail) {
+      setOwnerEmail((current) => current || statusOwnerEmail);
+      setPreferencesHydratedForIntent(paymentIntentId);
+    }
+  }, [
+    paymentIntentId,
+    paymentIntentStatus.data?.ownerEmail,
+    paymentNotificationPreferences.data,
+    preferencesHydratedForIntent,
+  ]);
 
   useEffect(() => {
     if (uploadsDisabled && isDragging) {
@@ -393,25 +534,11 @@ export default function CreateCapsule() {
     });
 
     const lastStatus = lastPaymentStatusRef.current;
-    if (lastStatus === status) {
-      if (
-        status === "confirmed" &&
-        step === 1 &&
-        hasAutoAdvancedForIntentRef.current !== paymentIntentId
-      ) {
-        hasAutoAdvancedForIntentRef.current = paymentIntentId;
-        setStep(2);
-      }
-      return;
-    }
+    if (lastStatus === status) return;
 
     lastPaymentStatusRef.current = status;
     if (status === "confirmed") {
-      toast.success("Payment confirmed. You can continue.");
-      if (step === 1 && hasAutoAdvancedForIntentRef.current !== paymentIntentId) {
-        hasAutoAdvancedForIntentRef.current = paymentIntentId;
-        setStep(2);
-      }
+      toast.success("Payment confirmed. Confirm contact preferences to continue.");
       return;
     }
 
@@ -428,8 +555,42 @@ export default function CreateCapsule() {
     }
   }, [paymentIntentId, paymentIntentStatus.data?.status, step]);
 
-  async function handleCardPaymentSubmitted() {
-    toast.info("Payment submitted. Waiting for secure confirmation...");
+  async function handleContinue() {
+    try {
+      if (step === 4 && requiresPayment && paymentIntentId) {
+        await savePaymentNotificationPreferences.mutateAsync({
+          intentId: paymentIntentId,
+          ownerEmail: ownerEmail.trim(),
+          reminderTarget,
+          recipientEmail: reminderTarget === "other" ? recipientEmail.trim() : undefined,
+          reminderOptIn,
+          marketingOptIn,
+          notifyRecipientOnCreation:
+            reminderTarget === "other" ? notifyRecipientOnCreation : false,
+          hasRecipientPermission: reminderTarget === "other" ? hasRecipientPermission : false,
+        });
+        if (
+          reminderTarget === "other" &&
+          reminderOptIn &&
+          notifyRecipientOnCreation &&
+          creationNoticeTriggeredForIntent !== paymentIntentId
+        ) {
+          // Recipient creation notices currently route through the legacy
+          // payments relay's email path. With the relay decommissioned, this
+          // notification is silently skipped until the Resend migration to
+          // canister HTTPS outcalls lands. The backend already records the
+          // user's preferences, so the reminder cron will still send the
+          // unlock + expiry emails even without this immediate notice.
+          setCreationNoticeTriggeredForIntent(paymentIntentId);
+        }
+      }
+      setStep((s) => s + 1);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to continue. Please check your details.";
+      console.error("[create-step-continue]", { error: String(error) });
+      toast.error(message);
+    }
   }
 
   if (needsAuth) {
@@ -450,7 +611,8 @@ export default function CreateCapsule() {
           </p>
           <Button
             onClick={login}
-            className="w-full bg-primary text-primary-foreground hover:bg-primary/90 glow-cyan rounded-sm"
+            variant="utility"
+            className="w-full glow-cyan rounded-sm"
             data-ocid="create.primary_button"
           >
             Connect Wallet
@@ -483,8 +645,8 @@ export default function CreateCapsule() {
             <span className="text-primary text-glow-cyan">Sealed!</span>
           </h1>
           <p className="text-muted-foreground mb-8">
-            It's now permanently stored on the blockchain. Share the claim link
-            — it contains the decryption key.
+            It's sealed on the blockchain under your selected plan's retention
+            policy. Share the claim link — it contains the decryption key.
           </p>
 
           <div className="p-6 rounded-sm border border-border/60 bg-card/80 mb-6 text-left">
@@ -554,8 +716,8 @@ export default function CreateCapsule() {
             <Dialog>
               <DialogTrigger asChild>
                 <Button
-                  variant="outline"
-                  className="border-amber/40 text-amber hover:bg-amber/10 glow-amber rounded-sm"
+                  variant="sales"
+                  className="rounded-sm"
                   data-ocid="create.open_modal_button"
                 >
                   <Gem className="w-4 h-4 mr-2" />
@@ -580,7 +742,8 @@ export default function CreateCapsule() {
                   when it launches.
                 </p>
                 <Button
-                  className="w-full bg-amber/20 text-amber border border-amber/40 hover:bg-amber/30 rounded-sm"
+                  variant="sales"
+                  className="w-full rounded-sm"
                   data-ocid="keepsake.confirm_button"
                 >
                   Notify Me
@@ -590,7 +753,8 @@ export default function CreateCapsule() {
 
             <Button
               onClick={() => navigate({ to: "/dashboard" })}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 glow-cyan rounded-sm"
+              variant="utility"
+              className="glow-cyan rounded-sm"
               data-ocid="create.primary_button"
             >
               <LayoutDashboard className="w-4 h-4 mr-2" />
@@ -731,37 +895,107 @@ export default function CreateCapsule() {
                   </p>
                   {usingPricingFallback && (
                     <p className="text-xs text-amber mb-4">
-                      Pricing service is temporarily unavailable. Showing default plans.
+                      Pricing service is unavailable. Please retry in a moment.
                     </p>
                   )}
                 </div>
                 <div className="grid gap-3">
-                  {plans.map((plan) => (
-                    <button
-                      type="button"
-                      key={plan.tier}
-                      onClick={() => setSelectedPlan(plan.tier)}
-                      className={`text-left rounded-sm border p-4 transition ${
-                        selectedPlan === plan.tier
-                          ? "border-primary/60 bg-primary/10"
-                          : "border-border/40 bg-secondary/20 hover:border-primary/30"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium capitalize">{plan.name}</span>
-                        <span className="font-semibold">
-                          {plan.amountUsdCents === 0n
-                            ? "Free"
-                            : `$${(Number(plan.amountUsdCents) / 100).toFixed(2)}`}
-                        </span>
-                      </div>
-                      {plan.tier === "free" && (
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          Free includes up to 200 message characters and no file uploads.
-                        </p>
-                      )}
-                    </button>
-                  ))}
+                  {plans.length === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      Plan options are loading from the backend.
+                    </p>
+                  )}
+                  <Accordion
+                    type="single"
+                    collapsible
+                    value={selectedPlan ?? ""}
+                    onValueChange={(value) => {
+                      if (value === "free" || value === "signature" || value === "legacy") {
+                        setSelectedPlan(value);
+                        return;
+                      }
+                      setSelectedPlan(null);
+                    }}
+                    className="space-y-3"
+                  >
+                    {plans.map((plan) => {
+                      const isSelected = selectedPlan === plan.tier;
+                      const priceLabel =
+                        plan.amountUsdCents === 0n
+                          ? "Free"
+                          : `$${(Number(plan.amountUsdCents) / 100).toFixed(2)}`;
+                      const planDetails =
+                        plan.tier === "free"
+                          ? [
+                              "Up to 200 message characters",
+                              "No file uploads",
+                              "Unlock date must be within 1 year",
+                            ]
+                          : plan.tier === "signature"
+                            ? [
+                                "Up to 5 files, max 5MB each (25MB total)",
+                                "Unlock date up to 5 years ahead",
+                                "Available for 30 days after unlock",
+                              ]
+                            : [
+                                "Up to 10 files, max 10MB each (100MB total)",
+                                "Unlock date up to 50 years ahead",
+                                "Built for long-term storage",
+                              ];
+
+                      return (
+                        <AccordionItem
+                          key={plan.tier}
+                          value={plan.tier}
+                          className={`rounded-sm border last:border-b px-4 transition-colors ${
+                            isSelected
+                              ? "border-amber/70 bg-amber/12"
+                              : "border-border/70 bg-secondary/35 hover:border-amber/45"
+                          }`}
+                        >
+                          <AccordionTrigger className="py-4 text-foreground hover:no-underline">
+                            <div className="flex w-full items-center justify-between text-left pr-2">
+                              <span className="font-medium capitalize">{plan.name}</span>
+                              <span className="font-semibold text-foreground">{priceLabel}</span>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent className="pb-4">
+                            <div className="space-y-3">
+                              <p className="text-xs text-foreground/80">
+                                Includes {plan.includedCanisters.toString()} canister
+                                {plan.includedCanisters === 1n ? "" : "s"}.
+                              </p>
+                              <ul className="space-y-2">
+                                {planDetails.map((detail) => (
+                                  <li
+                                    key={detail}
+                                    className="flex items-start gap-2 text-xs text-foreground/80"
+                                  >
+                                    <span
+                                      className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber"
+                                      aria-hidden
+                                    />
+                                    <span>{detail}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                              {plan.tier === "free" && (
+                                <p className="text-xs text-foreground/80">
+                                  Free includes up to 200 message characters and no file uploads.
+                                </p>
+                              )}
+                              {plan.tier === "legacy" && (
+                                <p className="text-xs text-foreground/80">
+                                  Lifetime retention goal, subject to network availability and
+                                  protocol continuity.
+                                </p>
+                              )}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      );
+                    })}
+                  </Accordion>
                 </div>
                 {requiresPayment && (
                   <div className="space-y-3 rounded-sm border border-border/40 p-4">
@@ -769,39 +1003,164 @@ export default function CreateCapsule() {
                     <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
-                        variant={paymentMethod === "card" ? "default" : "outline"}
+                        variant={paymentMethod === "card" ? "sales" : "outline"}
                         onClick={() => setPaymentMethod("card")}
+                        className={
+                          paymentMethod !== "card"
+                            ? "border-amber/40 text-amber hover:bg-amber/10"
+                            : ""
+                        }
                       >
                         Credit card
                       </Button>
                       <Button
                         type="button"
-                        variant={paymentMethod === "crypto" ? "default" : "outline"}
+                        variant={paymentMethod === "crypto" ? "sales" : "outline"}
                         onClick={() => setPaymentMethod("crypto")}
                         disabled
+                        className={
+                          paymentMethod !== "crypto"
+                            ? "border-amber/40 text-amber hover:bg-amber/10"
+                            : ""
+                        }
                       >
                         Crypto (Coming soon)
                       </Button>
                       <Button
                         type="button"
-                        variant={paymentMethod === "voucher" ? "default" : "outline"}
+                        variant={paymentMethod === "voucher" ? "sales" : "outline"}
                         onClick={() => setPaymentMethod("voucher")}
-                        disabled
+                        className={
+                          paymentMethod !== "voucher"
+                            ? "border-amber/40 text-amber hover:bg-amber/10"
+                            : ""
+                        }
                       >
-                        Voucher (Coming soon)
+                        Voucher
                       </Button>
                     </div>
                     {paymentMethod === "card" && (
-                      <StripeCardForm
-                        clientSecret={stripeClientSecret}
-                        disabled={
-                          createPaymentIntent.isPending ||
-                          createStripeClientSecret.isPending
-                        }
-                        onPaymentSubmitted={handleCardPaymentSubmitted}
-                        onPaymentError={(message) => toast.error(message)}
-                      />
+                      <div className="space-y-3">
+                        {isPaymentInitializing && (
+                          <p className="text-xs text-muted-foreground">
+                            Preparing secure checkout…
+                          </p>
+                        )}
+                        {!isPaymentConfirmed && stripePaymentLinkUrl && (
+                          <>
+                            <p className="text-xs text-muted-foreground">
+                              You'll be redirected to Stripe in a new tab to enter
+                              your card. After paying, return here — this page
+                              advances automatically once payment is confirmed.
+                            </p>
+                            <Button
+                              asChild
+                              variant="sales"
+                              className="w-full sm:w-auto"
+                              data-ocid="create.primary_button"
+                            >
+                              <a
+                                href={stripePaymentLinkUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => {
+                                  trackEvent("payment_link_opened", {
+                                    plan_tier: selectedPlan ?? "unknown",
+                                    payment_intent_id: paymentIntentId,
+                                  });
+                                }}
+                              >
+                                Pay with Stripe
+                              </a>
+                            </Button>
+                            <p className="text-[11px] text-muted-foreground">
+                              Waiting for confirmation…
+                            </p>
+                          </>
+                        )}
+                        {!isPaymentConfirmed && stripePaymentLinkMissing && (
+                          <p className="text-xs text-amber">
+                            Stripe Payment Link not configured for this plan. Set{" "}
+                            <code className="font-mono">
+                              VITE_STRIPE_LINK_{(selectedPlan ?? "").toUpperCase()}
+                            </code>{" "}
+                            and rebuild.
+                          </p>
+                        )}
+                        {isPaymentConfirmed && (
+                          <p className="text-xs text-primary">
+                            Payment confirmed. Continue below.
+                          </p>
+                        )}
+                      </div>
                     )}
+                    {paymentMethod === "voucher" && (
+                      <div className="space-y-2">
+                        <Label htmlFor="voucherCode" className="text-xs text-foreground/80">
+                          Voucher code
+                        </Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="voucherCode"
+                            value={voucherCode}
+                            onChange={(event) =>
+                              setVoucherCode(event.target.value.toUpperCase().trim())
+                            }
+                            placeholder="voucher code"
+                          />
+                          <Button
+                            type="button"
+                            variant="sales"
+                            onClick={() =>
+                              handleRedeemVoucher().catch((error) => {
+                                toast.error(
+                                  error instanceof Error
+                                    ? error.message
+                                    : "Failed to redeem voucher.",
+                                );
+                              })
+                            }
+                            disabled={
+                              redeemVoucherCode.isPending || isPaymentConfirmed || !voucherCode
+                            }
+                          >
+                            Redeem
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          One code unlocks one paid canister for the selected plan.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {requiresPayment && isPaymentConfirmed && (
+                  <div className="space-y-4 rounded-sm border border-border/40 bg-secondary/20 p-4">
+                    <p className="text-sm font-medium text-foreground">Owner contact</p>
+                    <div className="space-y-2">
+                      <Label htmlFor="ownerEmail" className="text-xs text-foreground/80">
+                        Owner email
+                      </Label>
+                      <Input
+                        id="ownerEmail"
+                        type="email"
+                        value={ownerEmail}
+                        onChange={(event) => setOwnerEmail(event.target.value)}
+                        placeholder="you@example.com"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Prefilled from Stripe when available. Used for account and payment updates.
+                      </p>
+                    </div>
+                    <div className="space-y-3 rounded-sm border border-border/50 p-3">
+                      <label className="flex items-start gap-2 text-xs text-foreground/80">
+                        <Checkbox
+                          checked={marketingOptIn}
+                          onCheckedChange={(checked) => setMarketingOptIn(checked === true)}
+                        />
+                        <span>I agree to marketing emails at owner email (with unsubscribe).</span>
+                      </label>
+                    </div>
                   </div>
                 )}
               </div>
@@ -876,7 +1235,8 @@ export default function CreateCapsule() {
                     </p>
                   ) : (
                     <p className="text-sm text-muted-foreground mb-4">
-                      Optional — images, documents, or media. Max 100MB total.
+                      Optional — images, documents, or media. Signature: 25MB total. Legacy:
+                      100MB total.
                     </p>
                   )}
 
@@ -918,7 +1278,7 @@ export default function CreateCapsule() {
                       Click or drag files here
                     </p>
                     <p className="text-xs text-muted-foreground/60 mt-1">
-                      Any file type · Up to 100MB
+                      Signature: 5 files, 5MB each · Legacy: 10 files, 10MB each
                     </p>
                   </button>
                   <input
@@ -1029,6 +1389,83 @@ export default function CreateCapsule() {
                     </p>
                   </motion.div>
                 )}
+                {requiresPayment && (
+                  <div className="space-y-4 rounded-sm border border-border/40 bg-secondary/20 p-4">
+                    <p className="text-sm font-medium text-foreground">Reminder preferences</p>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-foreground/80">Send reminders to</Label>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant={reminderTarget === "owner" ? "sales" : "outline"}
+                          onClick={() => {
+                            setReminderTarget("owner");
+                            setRecipientEmail("");
+                            setNotifyRecipientOnCreation(false);
+                            setHasRecipientPermission(false);
+                          }}
+                        >
+                          Me (owner)
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={reminderTarget === "other" ? "sales" : "outline"}
+                          onClick={() => {
+                            setReminderTarget("other");
+                            setNotifyRecipientOnCreation(true);
+                          }}
+                        >
+                          Someone else
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-3 rounded-sm border border-border/50 p-3">
+                      <label className="flex items-start gap-2 text-xs text-foreground/80">
+                        <Checkbox
+                          checked={reminderOptIn}
+                          onCheckedChange={(checked) => setReminderOptIn(checked === true)}
+                        />
+                        <span>I agree to reminder emails related to this capsule.</span>
+                      </label>
+                    </div>
+                    {reminderTarget === "other" && reminderOptIn && (
+                      <>
+                        <div className="space-y-2">
+                          <Label htmlFor="recipientEmail" className="text-xs text-foreground/80">
+                            Recipient email
+                          </Label>
+                          <Input
+                            id="recipientEmail"
+                            type="email"
+                            value={recipientEmail}
+                            onChange={(event) => setRecipientEmail(event.target.value)}
+                            placeholder="recipient@example.com"
+                          />
+                        </div>
+                        <div className="space-y-3 rounded-sm border border-border/50 p-3">
+                          <label className="flex items-start gap-2 text-xs text-foreground/80">
+                            <Checkbox
+                              checked={notifyRecipientOnCreation}
+                              onCheckedChange={(checked) =>
+                                setNotifyRecipientOnCreation(checked === true)
+                              }
+                            />
+                            <span>Notify recipient now when this capsule is created.</span>
+                          </label>
+                          <label className="flex items-start gap-2 text-xs text-foreground/80">
+                            <Checkbox
+                              checked={hasRecipientPermission}
+                              onCheckedChange={(checked) =>
+                                setHasRecipientPermission(checked === true)
+                              }
+                            />
+                            <span>I confirm I have permission to email this recipient.</span>
+                          </label>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1114,11 +1551,12 @@ export default function CreateCapsule() {
 
                 <div className="p-4 rounded-sm border border-amber/20 bg-amber/5">
                   <p className="text-xs text-amber/80">
-                    ⚠ Once sealed, this canister is{" "}
+                    ⚠ Once sealed, capsule metadata is immutable. Signature files expire 30 days
+                    after unlock; Legacy targets long-horizon retention.{" "}
                     <strong className="text-amber">
-                      immutable and permanent
+                      Check your plan retention policy
                     </strong>
-                    . The unlock date and content cannot be changed or deleted.
+                    .
                   </p>
                 </div>
               </div>
@@ -1140,9 +1578,10 @@ export default function CreateCapsule() {
 
           {step < 5 ? (
             <Button
-              onClick={() => setStep((s) => s + 1)}
-              disabled={!canAdvance()}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 glow-cyan rounded-sm disabled:opacity-40"
+              onClick={handleContinue}
+              disabled={!canAdvance() || isSavingContactPreferences}
+              variant="utility"
+              className="glow-cyan rounded-sm disabled:opacity-40"
               data-ocid="create.primary_button"
             >
               Continue <ArrowRight className="w-4 h-4 ml-2" />
@@ -1155,7 +1594,8 @@ export default function CreateCapsule() {
                   createCapsule.isPending ||
                   (requiresPayment && !isPaymentConfirmed)
                 }
-                className="px-8 bg-primary text-primary-foreground hover:bg-primary/90 glow-cyan-lg rounded-sm font-semibold"
+                variant="utility"
+                className="px-8 glow-cyan-lg rounded-sm font-semibold"
                 data-ocid="create.submit_button"
               >
                 <Lock className="w-4 h-4 mr-2" />

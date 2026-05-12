@@ -17,6 +17,7 @@ import {
   useState,
 } from "react";
 import { loadConfig } from "../config";
+import { trackEvent } from "../lib/analytics";
 
 export type Status =
   | "initializing"
@@ -62,8 +63,7 @@ const ONE_HOUR_IN_NANOSECONDS = BigInt(3_600_000_000_000);
 
 function getLocalIdentityProvider(): string {
   const localIiCanisterId =
-    process.env.CANISTER_ID_INTERNET_IDENTITY ||
-    "rdmx6-jaaaa-aaaaa-aaadq-cai";
+    process.env.CANISTER_ID_INTERNET_IDENTITY || "rdmx6-jaaaa-aaaaa-aaadq-cai";
 
   // ICP docs note Safari-family browsers may require ?canisterId format,
   // while Chromium/Firefox generally work with <canister>.localhost.
@@ -203,16 +203,25 @@ export function InternetIdentityProvider({
     }
     setIdentity(latestIdentity);
     setStatus("success");
+    trackEvent("auth_sign_in_result", { result: "success" });
   }, [authClient, setErrorMessage]);
 
   const handleLoginError = useCallback(
     (maybeError?: string) => {
+      trackEvent("auth_sign_in_result", {
+        result: "error",
+        error_message: maybeError ?? "Login failed",
+      });
       setErrorMessage(maybeError ?? "Login failed");
     },
     [setErrorMessage],
   );
 
   const login = useCallback(() => {
+    trackEvent("auth_sign_in_clicked", {
+      entry_point: "unknown",
+      is_authenticated: false,
+    });
     if (!authClient) {
       setErrorMessage(
         "AuthClient is not initialized yet, make sure to call `login` on user interaction e.g. click.",
@@ -251,6 +260,7 @@ export function InternetIdentityProvider({
     void authClient
       .logout()
       .then(() => {
+        trackEvent("auth_sign_out", { entry_point: "unknown" });
         setIdentity(undefined);
         setAuthClient(undefined);
         setStatus("idle");

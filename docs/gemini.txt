@@ -1,0 +1,56 @@
+Since you are based in Portugal and using a custom PaymentIntent integration with Stripe Elements, enabling USDC is still very straightforward. In the EU, Stripe facilitates this through the "Crypto" payment method, which leverages the stablecoin infrastructure they scaled globally throughout 2024 and 2025.
+
+Because you are using the Payment Element, your frontend work is almost zero, but your backend and webhook logic will need two minor "sanity checks."
+
+1. Frontend: Zero Effort
+   Since you are using the PaymentElement in your React/TS component, Stripe handles the UI for you.
+
+Automatic UI: Once you enable "Crypto" in your Stripe Dashboard, the Payment Element will automatically show "Crypto" or "USDC" as an option alongside Credit Cards.
+
+No Code Change: Your call to stripe.confirmPayment(...) remains the same. Stripe will handle the modal or redirect required to show the customer the QR code/wallet address.
+
+2. Backend: PaymentIntent Update
+   When you create the PaymentIntent in your Node.js relay (server.mjs), you need to ensure you aren't hardcoding payment method types.
+
+Current (Likely):
+
+JavaScript
+const paymentIntent = await stripe.paymentIntents.create({
+amount: 1000,
+currency: 'eur',
+payment_method_types: ['card'], // If this is hardcoded, it won't work
+});
+Recommended:
+Go to your Stripe Dashboard > Settings > Payment Methods and turn on USDC. Then, change your code to use Automatic Payment Methods. This lets you manage methods from the dashboard without touching code again:
+
+JavaScript
+const paymentIntent = await stripe.paymentIntents.create({
+amount: 1000,
+currency: 'eur', // Stripe converts USDC to your settlement currency automatically
+automatic_payment_methods: { enabled: true },
+}); 3. Webhook Reconciliation (The Motoko Part)
+Your Motoko backend expects a confirmation. For USDC, the flow looks like this:
+
+Customer chooses USDC: Stripe generates a unique wallet address for that specific PaymentIntent.
+
+Payment sent: The customer sends USDC via Ethereum, Solana, or Polygon.
+
+Webhook trigger: Once the transaction is confirmed on-chain, Stripe sends the payment_intent.succeeded event to your Node.js relay.
+
+Motoko Update: Your relay calls confirmPaymentIntent(...) in Motoko just like it does for cards.
+
+Important Note for your Webhook:
+Crypto payments can take longer to "confirm" than a credit card (anywhere from 30 seconds to a few minutes depending on the network). Ensure your Motoko logic handles the processing state if you want to show a "Waiting for blockchain confirmation" UI to the user.
+
+Constraints in Portugal / EU
+Settlement: Even though the customer pays in USDC, Stripe will settle the funds into your balance in EUR. This is actually a benefit for you, as it simplifies your accounting in Portugal and avoids complex crypto-tax reporting for every single sale.
+
+Fees: Expect a fee of approximately 1.5%.
+
+Refunds: If you need to refund a USDC payment, Stripe will refund the original USDC amount. You will need to have a balance in your Stripe account to cover this.
+
+Summary of Difficulty
+Component Effort Action
+Stripe Dashboard 1 min Toggle "Crypto" to ON.
+Node.js Relay 5 mins Ensure automatic_payment_methods is enabled.
+Motoko Backend 0 mins Existing webhook logic for payment_intent.succeeded should "just work."

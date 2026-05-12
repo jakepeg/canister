@@ -24,7 +24,22 @@ const FAQ_ITEMS = [
   {
     question: "What can I store in a canister?",
     answer:
-      "You can store text memories, personal messages, documents, and media files, depending on platform limits and your selected plan.",
+      "Free supports message-only capsules (up to 200 characters). Signature supports up to 5 files (5MB each, 25MB total) with up to a 5-year unlock horizon. Legacy supports up to 10 files (10MB each, 100MB total) with up to a 50-year unlock horizon.",
+  },
+  {
+    question: "How long is my canister retained?",
+    answer:
+      "Signature capsules remain accessible for 30 days after unlock, then content access expires. Legacy is built for long-term storage, with a lifetime retention goal that is subject to network availability and protocol continuity.",
+  },
+  {
+    question: "Can reminder emails go to someone else?",
+    answer:
+      "Yes. You can send reminders to yourself (owner email) or to a different recipient such as a spouse or child. If you choose someone else, you can optionally notify them at creation time and you must confirm permission to email them.",
+  },
+  {
+    question: "Are reminders and marketing consent linked?",
+    answer:
+      "No. Reminder consent and marketing consent are separate choices. Marketing applies only to owner email and includes unsubscribe support.",
   },
   {
     question: "Why use Canister instead of traditional cloud storage?",

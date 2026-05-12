@@ -18,6 +18,7 @@ import {
   useGetCapsuleContent,
   useGetCapsuleMetadata,
 } from "../hooks/useQueries";
+import { trackEvent } from "../lib/analytics";
 
 function formatDate(timeNs: bigint): string {
   return new Date(Number(timeNs / 1_000_000n)).toLocaleDateString("en-US", {
@@ -160,6 +161,10 @@ export default function ClaimPage() {
       setDecryptError("Please paste a decryption key to continue.");
       return;
     }
+    trackEvent("claim_key_submitted", {
+      capsule_id: capsuleId,
+      source: "manual_input",
+    });
     setDecryptKey(trimmed);
     setDecryptedMessage(null);
     setDecryptError(null);
@@ -194,7 +199,7 @@ export default function ClaimPage() {
           </Button>
           <Button
             onClick={submitManualKey}
-            className="bg-primary text-primary-foreground hover:bg-primary/90"
+            variant="utility"
             data-ocid="claim.primary_button"
           >
             Unlock
@@ -225,9 +230,26 @@ export default function ClaimPage() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
+      trackEvent("claim_file_downloaded", {
+        capsule_id: capsuleId,
+        file_id: fileId,
+      });
     },
     [actor, capsuleId, hasUnlockedWithKey],
   );
+
+  useEffect(() => {
+    trackEvent("claim_page_opened", {
+      capsule_id: capsuleId,
+      has_key_in_url_hash: Boolean(window.location.hash.slice(1)),
+    });
+    if (window.location.hash.slice(1)) {
+      trackEvent("claim_key_submitted", {
+        capsule_id: capsuleId,
+        source: "url_hash",
+      });
+    }
+  }, [capsuleId]);
 
   // Countdown timer
   useEffect(() => {
@@ -246,14 +268,23 @@ export default function ClaimPage() {
     try {
       const msg = await decryptMessage(content.encryptedMessage, decryptKey);
       setDecryptedMessage(msg);
+      trackEvent("claim_decrypt_result", {
+        capsule_id: capsuleId,
+        result: "success",
+      });
     } catch {
+      trackEvent("claim_decrypt_result", {
+        capsule_id: capsuleId,
+        result: "error",
+        error_type: "bad_key_or_missing_key",
+      });
       setDecryptError(
         "Failed to decrypt — the key in the URL may be incorrect or missing.",
       );
     } finally {
       setIsDecrypting(false);
     }
-  }, [content, decryptKey]);
+  }, [capsuleId, content, decryptKey]);
 
   useEffect(() => {
     if (content && decryptKey && !decryptedMessage && !decryptError) {
@@ -360,9 +391,11 @@ export default function ClaimPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2, duration: 0.6 }}
           >
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-amber/30 bg-amber/10 text-amber text-xs font-mono-display font-medium mb-6">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-amber/30 bg-amber/10 text-amber text-xs font-mono-display font-medium mb-6">
               <span className="w-1.5 h-1.5 rounded-full bg-amber animate-pulse" />
-              {isUnlocked ? "TIME REACHED · KEY REQUIRED" : "SEALED · BLOCKCHAIN ENFORCED"}
+                {isUnlocked
+                  ? "TIME REACHED · KEY REQUIRED"
+                  : "SEALED · BLOCKCHAIN ENFORCED"}
             </div>
 
             <h1 className="font-display text-4xl md:text-5xl font-bold text-foreground mb-4">
@@ -418,8 +451,7 @@ export default function ClaimPage() {
             {isUnlocked && !isDecrypting && (
               <div className="mb-10 flex justify-center">
                 <Button
-                  variant="outline"
-                  className="border-primary/30 text-primary hover:bg-primary/10"
+                  variant="utility"
                   onClick={() => setIsKeyDialogOpen(true)}
                   data-ocid="claim.secondary_button"
                 >

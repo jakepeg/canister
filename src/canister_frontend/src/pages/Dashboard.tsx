@@ -113,7 +113,8 @@ export default function Dashboard() {
           </p>
           <Button
             onClick={login}
-            className="w-full bg-primary text-primary-foreground hover:bg-primary/90 glow-cyan rounded-sm"
+            variant="utility"
+            className="w-full glow-cyan rounded-sm"
             data-ocid="dashboard.primary_button"
           >
             <LogIn className="w-4 h-4 mr-2" />
@@ -147,7 +148,8 @@ export default function Dashboard() {
           >
             <Button
               onClick={() => navigate({ to: "/create" })}
-              className="bg-primary/20 hover:bg-primary/30 text-primary border border-primary/40 glow-cyan rounded-sm"
+              variant="utility"
+              className="glow-cyan rounded-sm"
               data-ocid="dashboard.primary_button"
             >
               <Plus className="w-4 h-4 mr-2" />
@@ -195,7 +197,8 @@ export default function Dashboard() {
             </p>
             <Button
               onClick={() => navigate({ to: "/create" })}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 glow-cyan rounded-sm"
+              variant="utility"
+              className="glow-cyan rounded-sm"
               data-ocid="dashboard.primary_button"
             >
               Create Your First Canister

@@ -9,7 +9,7 @@ const POLICY_SECTIONS = [
   {
     title: "Data you provide",
     content:
-      "When you create a canister, you may upload text, files, media, and metadata such as unlock date preferences. Wallet and identity data are used only for authentication, authorization, and ownership verification.",
+      "When you create a canister, you may upload encrypted text, files, media, and metadata such as unlock date preferences. Wallet and identity data are used only for authentication, authorization, and ownership verification.",
   },
   {
     title: "How we use information",
@@ -17,14 +17,24 @@ const POLICY_SECTIONS = [
       "Information is used to secure your account, process canister creation, enforce unlock conditions, and deliver reliable decentralized storage access. We do not sell personal data.",
   },
   {
+    title: "Email roles and consent",
+    content:
+      "For paid plans, owner email (usually the Stripe payer email) is used for account/payment context. You can set reminder email delivery to the owner or to another recipient. Reminder consent and marketing consent are stored separately, and marketing is owner-email only.",
+  },
+  {
     title: "On-chain and off-chain processing",
     content:
-      "Core ownership and canister state are recorded on-chain. Some supporting application operations may run off-chain for performance and delivery, but the product is designed around transparent, verifiable blockchain records.",
+      "Core ownership and canister state are recorded on-chain. Some supporting application operations may run off-chain for performance and payments, but product-critical access rules and unlock checks are enforced with verifiable blockchain records.",
+  },
+  {
+    title: "Retention and deletion policy",
+    content:
+      "Retention depends on your selected plan. Signature includes a fixed post-unlock availability window and then content access expires. Legacy is designed for long-horizon retention with continuity caveats. We publish plan retention terms so storage behavior and costs remain predictable.",
   },
   {
     title: "Your control and rights",
     content:
-      "You control your canisters through your authenticated identity. You can request account-related support, export available information, and contact us for privacy inquiries and policy clarifications.",
+      "You control your canisters through your authenticated identity. Marketing emails include unsubscribe links and opt-out is honored. You can request account-related support, export available information, and contact us for privacy inquiries and policy clarifications.",
   },
   {
     title: "Security commitments",

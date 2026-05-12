@@ -1,4 +1,5 @@
 import Map "mo:core/Map";
+import Set "mo:core/Set";
 import Text "mo:core/Text";
 import Iter "mo:core/Iter";
 import Time "mo:core/Time";
@@ -7,18 +8,26 @@ import Order "mo:core/Order";
 import Runtime "mo:core/Runtime";
 import Array "mo:core/Array";
 import Nat "mo:core/Nat";
+import Nat8 "mo:core/Nat8";
+import Nat16 "mo:core/Nat16";
 import Int "mo:core/Int";
+import Blob "mo:core/Blob";
+import Char "mo:core/Char";
 import MixinStorage "blob-storage/Mixin";
 import Storage "blob-storage/Storage";
 import MixinAuthorization "authorization/MixinAuthorization";
 import AccessControl "authorization/access-control";
+import HmacSha256 "crypto/HmacSha256";
+import Hex "crypto/Hex";
+import JsonExtract "crypto/JsonExtract";
 
 persistent actor {
-  transient let accessControlState = AccessControl.initState();
+  // Non-transient fields survive `dfx deploy` / wasm upgrades (orthogonal persistence).
+  let accessControlState = AccessControl.initState();
   include MixinAuthorization(accessControlState);
   include MixinStorage();
 
-  private transient var nextCapsuleId = 0;
+  private var nextCapsuleId = 0;
 
   public type CapsuleId = Nat;
   public type Capsule = {
@@ -93,6 +102,7 @@ persistent actor {
     expiresAt : Time.Time;
     confirmedAt : ?Time.Time;
     usedByCapsuleId : ?CapsuleId;
+    ownerEmail : ?Text;
   };
 
   public type PaymentIntentStatus = {
@@ -107,10 +117,32 @@ persistent actor {
     confirmedAt : ?Time.Time;
     usedByCapsuleId : ?CapsuleId;
     checkoutUrl : Text;
+    ownerEmail : ?Text;
   };
 
   public type UserProfile = {
     name : Text;
+  };
+
+  public type ReminderTarget = {
+    #owner;
+    #other;
+  };
+
+  public type NotificationPreferences = {
+    ownerEmail : Text;
+    recipientEmail : ?Text;
+    reminderTarget : ReminderTarget;
+    reminderOptIn : Bool;
+    marketingOptIn : Bool;
+    notifyRecipientOnCreation : Bool;
+    hasRecipientPermission : Bool;
+    reminderConsentAt : ?Time.Time;
+    marketingConsentAt : ?Time.Time;
+    creationNoticeSentAt : ?Time.Time;
+    unlockReminderSentAt : ?Time.Time;
+    expiryReminderSentAt : ?Time.Time;
+    updatedAt : Time.Time;
   };
 
   public type StoredFile = {
@@ -121,6 +153,52 @@ persistent actor {
     sizeBytes : Nat;
     uploadedBy : Principal;
     uploadedAt : Time.Time;
+  };
+
+  public type PlanLimits = {
+    maxMessageChars : ?Nat;
+    maxFilesPerCapsule : Nat;
+    maxFileBytes : Nat;
+    maxTotalAttachmentBytes : Nat;
+    maxUnlockHorizonNs : Int;
+    retentionAfterUnlockNs : ?Int;
+  };
+
+  public type VoucherCampaign = {
+    id : Text;
+    tier : PlanTier;
+    active : Bool;
+    expiresAt : ?Time.Time;
+    issuedCount : Nat;
+    redeemedCount : Nat;
+    createdAt : Time.Time;
+    updatedAt : Time.Time;
+  };
+
+  public type VoucherCodeRecord = {
+    id : Text;
+    campaignId : Text;
+    tier : PlanTier;
+    codeFingerprint : Text;
+    claimedBy : ?Principal;
+    redeemedAt : ?Time.Time;
+    redeemedByIntentId : ?Text;
+    expiresAt : ?Time.Time;
+    createdAt : Time.Time;
+    updatedAt : Time.Time;
+  };
+
+  public type ProfitabilitySnapshot = {
+    totalCapsules : Nat;
+    freeCapsules : Nat;
+    signatureCapsules : Nat;
+    legacyCapsules : Nat;
+    activeSignatureCapsules : Nat;
+    expiredSignatureCapsules : Nat;
+    totalStoredFiles : Nat;
+    totalStoredFileBytes : Nat;
+    signatureStoredFileBytes : Nat;
+    legacyStoredFileBytes : Nat;
   };
 
   module Capsule {
@@ -135,23 +213,64 @@ persistent actor {
     };
   };
 
-  transient let capsules = Map.empty<CapsuleId, Capsule>();
-  transient let capsuleIdsByPublicId = Map.empty<Text, CapsuleId>();
-  transient let userProfiles = Map.empty<Principal, UserProfile>();
-  transient let paymentIntents = Map.empty<Text, PaymentIntent>();
-  transient let storedFiles = Map.empty<Text, StoredFile>();
+  // Capsule data path (must stay non-transient): capsule rows, public-id index,
+  // ID counter, per-capsule notification prefs, and `storedFiles` for attachments
+  // kept in this canister all survive wasm upgrades. External subnet blob hashes in
+  // `Capsule.fileRefs` are persisted here; the blobs themselves live on the IC
+  // storage layer and must remain "live" there for those bytes to resolve.
+  let capsules = Map.empty<CapsuleId, Capsule>();
+  let capsuleIdsByPublicId = Map.empty<Text, CapsuleId>();
+  let userProfiles = Map.empty<Principal, UserProfile>();
+  let paymentIntents = Map.empty<Text, PaymentIntent>();
+  let storedFiles = Map.empty<Text, StoredFile>();
+  let paymentNotificationPrefs = Map.empty<Text, NotificationPreferences>();
+  let capsuleNotificationPrefs = Map.empty<CapsuleId, NotificationPreferences>();
+  let voucherCampaigns = Map.empty<Text, VoucherCampaign>();
+  let voucherCodeByFingerprint = Map.empty<Text, VoucherCodeRecord>();
 
-  private transient var nextPaymentIntentId : Nat = 0;
-  private transient var nextStoredFileId : Nat = 0;
-  private transient var stripeWebhookSecret : ?Text = null;
-  private transient var coinbaseWebhookSecret : ?Text = null;
+  private var nextPaymentIntentId : Nat = 0;
+  private var nextStoredFileId : Nat = 0;
+  private var nextVoucherCodeId : Nat = 0;
+  // Persisted across upgrades so the webhook secret survives `dfx deploy`.
+  // The Stripe webhook handler in this canister verifies inbound webhook
+  // signatures against `stripeWebhookSecret`; admin sets it via
+  // `configurePaymentWebhookSecrets`.
+  private var stripeWebhookSecret : ?Text = null;
+  private var coinbaseWebhookSecret : ?Text = null;
+  private var localDevAdminBypassEnabled : Bool = false;
+  // Idempotency table for inbound Stripe webhooks. Stripe retries on non-2xx
+  // for up to 3 days, so we record every event.id we have already applied
+  // and short-circuit duplicates with a 200.
+  private var processedStripeEventIds = Set.empty<Text>();
+  private transient var testNowOverrideNs : ?Int = null;
+
+  private func effectiveNow() : Time.Time {
+    switch (testNowOverrideNs) {
+      case (null) { Time.now() };
+      case (?override_) { override_ };
+    };
+  };
 
   private let FREE_INCLUDED_CANISTERS : Nat = 1;
   private let FREE_MAX_MESSAGE_CHARS : Nat = 200;
   private let PAYMENT_INTENT_TTL_NS : Int = 15 * 60 * 1_000_000_000;
-  private let MAX_FILE_BYTES : Nat = 5 * 1024 * 1024;
-  private let MAX_FILES_PER_CAPSULE : Nat = 8;
-  private let MAX_TOTAL_ATTACHMENT_BYTES : Nat = 20 * 1024 * 1024;
+  private let DAY_NS : Int = 24 * 60 * 60 * 1_000_000_000;
+  private let YEAR_NS : Int = 365 * DAY_NS;
+  private let FREE_MAX_UNLOCK_HORIZON_NS : Int = 1 * YEAR_NS;
+  private let SIGNATURE_MAX_UNLOCK_HORIZON_NS : Int = 5 * YEAR_NS;
+  private let LEGACY_MAX_UNLOCK_HORIZON_NS : Int = 50 * YEAR_NS;
+  private let SIGNATURE_RETENTION_AFTER_UNLOCK_NS : Int = 30 * DAY_NS;
+  private let FREE_MAX_FILES_PER_CAPSULE : Nat = 0;
+  private let FREE_MAX_FILE_BYTES : Nat = 0;
+  private let FREE_MAX_TOTAL_ATTACHMENT_BYTES : Nat = 0;
+  private let SIGNATURE_MAX_FILES_PER_CAPSULE : Nat = 5;
+  private let SIGNATURE_MAX_FILE_BYTES : Nat = 5 * 1024 * 1024;
+  private let SIGNATURE_MAX_TOTAL_ATTACHMENT_BYTES : Nat = 25 * 1024 * 1024;
+  private let LEGACY_MAX_FILES_PER_CAPSULE : Nat = 10;
+  private let LEGACY_MAX_FILE_BYTES : Nat = 10 * 1024 * 1024;
+  private let LEGACY_MAX_TOTAL_ATTACHMENT_BYTES : Nat = 100 * 1024 * 1024;
+  private let ABSOLUTE_MAX_UPLOAD_FILE_BYTES : Nat = LEGACY_MAX_FILE_BYTES;
+  private let DEFAULT_VOUCHER_EXPIRE_AFTER_NS : Int = 30 * DAY_NS;
 
   private func planQuote(plan : PlanTier) : PlanQuote {
     switch (plan) {
@@ -189,6 +308,48 @@ persistent actor {
     intent.tier;
   };
 
+  private func planLimits(plan : PlanTier) : PlanLimits {
+    switch (plan) {
+      case (#free) {
+        {
+          maxMessageChars = ?FREE_MAX_MESSAGE_CHARS;
+          maxFilesPerCapsule = FREE_MAX_FILES_PER_CAPSULE;
+          maxFileBytes = FREE_MAX_FILE_BYTES;
+          maxTotalAttachmentBytes = FREE_MAX_TOTAL_ATTACHMENT_BYTES;
+          maxUnlockHorizonNs = FREE_MAX_UNLOCK_HORIZON_NS;
+          retentionAfterUnlockNs = null;
+        };
+      };
+      case (#signature) {
+        {
+          maxMessageChars = null;
+          maxFilesPerCapsule = SIGNATURE_MAX_FILES_PER_CAPSULE;
+          maxFileBytes = SIGNATURE_MAX_FILE_BYTES;
+          maxTotalAttachmentBytes = SIGNATURE_MAX_TOTAL_ATTACHMENT_BYTES;
+          maxUnlockHorizonNs = SIGNATURE_MAX_UNLOCK_HORIZON_NS;
+          retentionAfterUnlockNs = ?SIGNATURE_RETENTION_AFTER_UNLOCK_NS;
+        };
+      };
+      case (#legacy) {
+        {
+          maxMessageChars = null;
+          maxFilesPerCapsule = LEGACY_MAX_FILES_PER_CAPSULE;
+          maxFileBytes = LEGACY_MAX_FILE_BYTES;
+          maxTotalAttachmentBytes = LEGACY_MAX_TOTAL_ATTACHMENT_BYTES;
+          maxUnlockHorizonNs = LEGACY_MAX_UNLOCK_HORIZON_NS;
+          retentionAfterUnlockNs = null;
+        };
+      };
+    };
+  };
+
+  private func isSignatureRetentionExpired(capsule : Capsule, now : Time.Time) : Bool {
+    if (capsule.planTier != #signature) {
+      return false;
+    };
+    now > (capsule.unlockDate + SIGNATURE_RETENTION_AFTER_UNLOCK_NS);
+  };
+
   private func nextIntentId(caller : Principal) : Text {
     let id = "pi-" # Nat.toText(nextPaymentIntentId) # "-" # Int.toText(Time.now()) # "-" # caller.toText();
     nextPaymentIntentId += 1;
@@ -199,6 +360,46 @@ persistent actor {
     let id = "file-" # Nat.toText(nextStoredFileId) # "-" # Int.toText(Time.now()) # "-" # caller.toText();
     nextStoredFileId += 1;
     id;
+  };
+
+  private func nextVoucherCodeIdText(campaignId : Text) : Text {
+    let id = "voucher-" # campaignId # "-" # Nat.toText(nextVoucherCodeId) # "-" # Int.toText(Time.now());
+    nextVoucherCodeId += 1;
+    id;
+  };
+
+  private func normalizeVoucherCode(code : Text) : Text {
+    code;
+  };
+
+  private func normalizeCampaignId(campaignId : Text) : Text {
+    campaignId;
+  };
+
+  private func voucherCodeFingerprint(code : Text) : Text {
+    let normalized = normalizeVoucherCode(code);
+    normalized;
+  };
+
+  private func inferCampaignPrefixFromCode(code : Text) : Text {
+    let normalized = normalizeVoucherCode(code);
+    let parts = Text.split(normalized, #char '-');
+    switch (parts.next()) {
+      case (null) { Runtime.trap("Invalid voucher code format"); };
+      case (?prefix) {
+        if (prefix.size() == 0) {
+          Runtime.trap("Invalid voucher campaign prefix");
+        };
+        prefix;
+      };
+    };
+  };
+
+  private func campaignDefaultExpiry(now : Time.Time, campaignExpiry : ?Time.Time) : ?Time.Time {
+    switch (campaignExpiry) {
+      case (?custom) { ?custom };
+      case (null) { ?(now + DEFAULT_VOUCHER_EXPIRE_AFTER_NS) };
+    };
   };
 
   private func decodeFileRef(fileRef : Storage.ExternalBlob) : Text {
@@ -227,7 +428,7 @@ persistent actor {
   };
 
   private func isExpired(intent : PaymentIntent) : Bool {
-    Time.now() > intent.expiresAt;
+    effectiveNow() > intent.expiresAt;
   };
 
   private func countFreeCanistersFor(caller : Principal) : Nat {
@@ -259,7 +460,34 @@ persistent actor {
       confirmedAt = intent.confirmedAt;
       usedByCapsuleId = intent.usedByCapsuleId;
       checkoutUrl = intent.checkoutUrl;
+      ownerEmail = intent.ownerEmail;
     };
+  };
+
+  private func hasAtSymbol(email : Text) : Bool {
+    var hasAt = false;
+    for (char in email.chars()) {
+      if (char == '@') {
+        hasAt := true;
+      };
+    };
+    hasAt;
+  };
+
+  private func validateEmailOrTrap(email : Text) {
+    if (email.size() < 5 or not hasAtSymbol(email)) {
+      Runtime.trap("Invalid email format");
+    };
+  };
+
+  private func isLocalDevAdminBypassEnabled(caller : Principal) : Bool {
+    // Guard bypass behind an explicit runtime flag and restrict it to the
+    // local-style anonymous caller path used by the frontend in dev mode.
+    localDevAdminBypassEnabled and caller.isAnonymous();
+  };
+
+  private func isAuthorizedAdmin(caller : Principal) : Bool {
+    AccessControl.isAdmin(accessControlState, caller) or isLocalDevAdminBypassEnabled(caller);
   };
 
   // User profile management functions
@@ -271,7 +499,7 @@ persistent actor {
   };
 
   public query ({ caller }) func getUserProfile(user : Principal) : async ?UserProfile {
-    if (caller != user and not AccessControl.isAdmin(accessControlState, caller)) {
+    if (caller != user and not isAuthorizedAdmin(caller)) {
       Runtime.trap("Unauthorized: Can only view your own profile");
     };
     userProfiles.get(user);
@@ -282,6 +510,129 @@ persistent actor {
       Runtime.trap("Unauthorized: Only users can save profiles");
     };
     userProfiles.add(caller, profile);
+  };
+
+  public shared ({ caller }) func savePaymentNotificationPreferences(
+    intentId : Text,
+    ownerEmail : Text,
+    reminderTarget : ReminderTarget,
+    recipientEmail : ?Text,
+    reminderOptIn : Bool,
+    marketingOptIn : Bool,
+    notifyRecipientOnCreation : Bool,
+    hasRecipientPermission : Bool,
+  ) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized");
+    };
+    let intent = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?pi) { pi };
+    };
+    if (intent.creator != caller) {
+      Runtime.trap("Payment intent does not belong to caller");
+    };
+
+    validateEmailOrTrap(ownerEmail);
+    let normalizedOwnerEmail = ownerEmail.toLower();
+
+    let normalizedRecipientEmail : ?Text = switch (recipientEmail) {
+      case (null) { null };
+      case (?rawRecipient) {
+        let cleaned = rawRecipient.toLower();
+        validateEmailOrTrap(cleaned);
+        ?cleaned;
+      };
+    };
+
+    switch (reminderTarget) {
+      case (#owner) {
+        if (recipientEmail != null) {
+          Runtime.trap("Recipient email must be empty when reminders target owner");
+        };
+      };
+      case (#other) {
+        if (normalizedRecipientEmail == null) {
+          Runtime.trap("Recipient email is required when reminders target someone else");
+        };
+        if (not hasRecipientPermission) {
+          Runtime.trap("Recipient permission confirmation is required");
+        };
+      };
+    };
+
+    let existing = paymentNotificationPrefs.get(intentId);
+    let now = Time.now();
+    let previousReminderOptIn = switch (existing) {
+      case (null) { false };
+      case (?prefs) { prefs.reminderOptIn };
+    };
+    let previousMarketingOptIn = switch (existing) {
+      case (null) { false };
+      case (?prefs) { prefs.marketingOptIn };
+    };
+
+    let reminderConsentAt = switch (existing) {
+      case (?prefs) {
+        if (reminderOptIn and not previousReminderOptIn) ?now else prefs.reminderConsentAt;
+      };
+      case (null) {
+        if (reminderOptIn) ?now else null;
+      };
+    };
+    let marketingConsentAt = switch (existing) {
+      case (?prefs) {
+        if (marketingOptIn and not previousMarketingOptIn) ?now else prefs.marketingConsentAt;
+      };
+      case (null) {
+        if (marketingOptIn) ?now else null;
+      };
+    };
+    let previousCreationNoticeSentAt = switch (existing) {
+      case (null) { null };
+      case (?prefs) { prefs.creationNoticeSentAt };
+    };
+
+    paymentNotificationPrefs.add(
+      intentId,
+      {
+        ownerEmail = normalizedOwnerEmail;
+        recipientEmail = normalizedRecipientEmail;
+        reminderTarget;
+        reminderOptIn;
+        marketingOptIn;
+        notifyRecipientOnCreation;
+        hasRecipientPermission;
+        reminderConsentAt;
+        marketingConsentAt;
+        creationNoticeSentAt = previousCreationNoticeSentAt;
+        unlockReminderSentAt = switch (existing) {
+          case (?prefs) { prefs.unlockReminderSentAt };
+          case (null) { null };
+        };
+        expiryReminderSentAt = switch (existing) {
+          case (?prefs) { prefs.expiryReminderSentAt };
+          case (null) { null };
+        };
+        updatedAt = now;
+      },
+    );
+  };
+
+  public shared ({ caller }) func getPaymentNotificationPreferences(
+    intentId : Text
+  ) : async ?NotificationPreferences {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized");
+    };
+    let intent = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?pi) { pi };
+    };
+    if (intent.creator != caller) {
+      Runtime.trap("Payment intent does not belong to caller");
+    };
+    paymentNotificationPrefs.get(intentId);
   };
 
   // Time capsule functions
@@ -317,7 +668,7 @@ persistent actor {
       Runtime.trap("Encrypted message cannot be empty");
     };
 
-    if (unlockDate <= Time.now()) {
+    if (unlockDate <= effectiveNow()) {
       Runtime.trap("Unlock date must be in the future");
     };
 
@@ -351,18 +702,29 @@ persistent actor {
       };
     };
 
-    if (planTier == #free) {
-      if (messageCharCount > FREE_MAX_MESSAGE_CHARS) {
-        Runtime.trap("Free plan allows a maximum of 200 message characters.");
+    let limits = planLimits(planTier);
+    let now = effectiveNow();
+    if (unlockDate > now + limits.maxUnlockHorizonNs) {
+      Runtime.trap("Selected plan does not support that unlock horizon.");
+    };
+
+    switch (limits.maxMessageChars) {
+      case (null) {};
+      case (?maxChars) {
+        if (messageCharCount > maxChars) {
+          Runtime.trap("Message exceeds maximum size for selected plan.");
+        };
       };
-      if (fileRefs.size() > 0) {
+    };
+
+    if (fileRefs.size() > limits.maxFilesPerCapsule) {
+      if (planTier == #free) {
         Runtime.trap("Free plan does not include file uploads.");
       };
-    } else {
-      if (fileRefs.size() > MAX_FILES_PER_CAPSULE) {
         Runtime.trap("Too many files for one capsule.");
-      };
+    };
 
+    if (planTier != #free) {
       var totalAttachmentBytes : Nat = 0;
       for (fileRef in fileRefs.vals()) {
         let fileId = decodeFileRef(fileRef);
@@ -374,11 +736,14 @@ persistent actor {
         if (stored.uploadedBy != caller) {
           Runtime.trap("File ownership mismatch");
         };
+        if (stored.sizeBytes > limits.maxFileBytes) {
+          Runtime.trap("One or more files exceeds the per-file size limit for this plan.");
+        };
 
         totalAttachmentBytes += stored.sizeBytes;
       };
 
-      if (totalAttachmentBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+      if (totalAttachmentBytes > limits.maxTotalAttachmentBytes) {
         Runtime.trap("Total attachment size exceeds capsule limit.");
       };
     };
@@ -413,6 +778,12 @@ persistent actor {
             updatedAt = Time.now();
           },
         );
+        switch (paymentNotificationPrefs.get(intentId)) {
+          case (null) {};
+          case (?prefs) {
+            capsuleNotificationPrefs.add(id, prefs);
+          };
+        };
       };
     };
 
@@ -448,7 +819,7 @@ persistent actor {
     if (fileSize == 0) {
       Runtime.trap("File cannot be empty");
     };
-    if (fileSize > MAX_FILE_BYTES) {
+    if (fileSize > ABSOLUTE_MAX_UPLOAD_FILE_BYTES) {
       Runtime.trap("File exceeds max allowed size");
     };
 
@@ -477,7 +848,7 @@ persistent actor {
       title = capsule.title;
       unlockDate = capsule.unlockDate;
       createdDate = capsule.createdDate;
-      isUnlocked = Time.now() >= capsule.unlockDate;
+      isUnlocked = effectiveNow() >= capsule.unlockDate;
       planTier = capsule.planTier;
     };
   };
@@ -488,8 +859,11 @@ persistent actor {
   } {
     let capsule = getCapsuleByPublicId(id);
 
-    if (Time.now() < capsule.unlockDate) {
+    if (effectiveNow() < capsule.unlockDate) {
       Runtime.trap("Capsule is still locked until " # Int.toText(capsule.unlockDate));
+    };
+    if (isSignatureRetentionExpired(capsule, effectiveNow())) {
+      Runtime.trap("Signature retention window expired. Capsule content is no longer available.");
     };
 
     {
@@ -505,8 +879,11 @@ persistent actor {
   } {
     let capsule = getCapsuleByPublicId(capsuleId);
 
-    if (Time.now() < capsule.unlockDate) {
+    if (effectiveNow() < capsule.unlockDate) {
       Runtime.trap("Capsule is still locked");
+    };
+    if (isSignatureRetentionExpired(capsule, effectiveNow())) {
+      Runtime.trap("Signature retention window expired. Files are no longer available.");
     };
 
     if (not capsuleContainsFileId(capsule, fileId)) {
@@ -542,7 +919,7 @@ persistent actor {
           title = c.title;
           unlockDate = c.unlockDate;
           createdDate = c.createdDate;
-          isUnlocked = Time.now() >= c.unlockDate;
+          isUnlocked = effectiveNow() >= c.unlockDate;
           planTier = c.planTier;
         };
       }
@@ -558,6 +935,122 @@ persistent actor {
       Runtime.trap("Unauthorized");
     };
     [planQuote(#free), planQuote(#signature), planQuote(#legacy)];
+  };
+
+  public query ({ caller }) func getProfitabilitySnapshot() : async ProfitabilitySnapshot {
+    if (not isAuthorizedAdmin(caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    let now = effectiveNow();
+    var totalCapsules : Nat = 0;
+    var freeCapsules : Nat = 0;
+    var signatureCapsules : Nat = 0;
+    var legacyCapsules : Nat = 0;
+    var activeSignatureCapsules : Nat = 0;
+    var expiredSignatureCapsules : Nat = 0;
+    var signatureStoredFileBytes : Nat = 0;
+    var legacyStoredFileBytes : Nat = 0;
+
+    for (capsule in capsules.values()) {
+      totalCapsules += 1;
+      switch (capsule.planTier) {
+        case (#free) {
+          freeCapsules += 1;
+        };
+        case (#signature) {
+          signatureCapsules += 1;
+          if (isSignatureRetentionExpired(capsule, now)) {
+            expiredSignatureCapsules += 1;
+          } else {
+            activeSignatureCapsules += 1;
+          };
+          for (fileRef in capsule.fileRefs.vals()) {
+            let fileId = decodeFileRef(fileRef);
+            switch (storedFiles.get(fileId)) {
+              case (null) {};
+              case (?stored) { signatureStoredFileBytes += stored.sizeBytes };
+            };
+          };
+        };
+        case (#legacy) {
+          legacyCapsules += 1;
+          for (fileRef in capsule.fileRefs.vals()) {
+            let fileId = decodeFileRef(fileRef);
+            switch (storedFiles.get(fileId)) {
+              case (null) {};
+              case (?stored) { legacyStoredFileBytes += stored.sizeBytes };
+            };
+          };
+        };
+      };
+    };
+
+    var totalStoredFiles : Nat = 0;
+    var totalStoredFileBytes : Nat = 0;
+    for (file in storedFiles.values()) {
+      totalStoredFiles += 1;
+      totalStoredFileBytes += file.sizeBytes;
+    };
+
+    {
+      totalCapsules;
+      freeCapsules;
+      signatureCapsules;
+      legacyCapsules;
+      activeSignatureCapsules;
+      expiredSignatureCapsules;
+      totalStoredFiles;
+      totalStoredFileBytes;
+      signatureStoredFileBytes;
+      legacyStoredFileBytes;
+    };
+  };
+
+  public shared ({ caller }) func setTestNowOverride(overrideNs : ?Int) : async () {
+    if (not isAuthorizedAdmin(caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    testNowOverrideNs := overrideNs;
+  };
+
+  public query ({ caller = _ }) func getEffectiveNow() : async Time.Time {
+    effectiveNow();
+  };
+
+  public shared ({ caller }) func purgeExpiredSignatureCapsules() : async Nat {
+    if (not isAuthorizedAdmin(caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    let now = effectiveNow();
+    var purgedCapsuleCount : Nat = 0;
+    for (capsule in capsules.values()) {
+      if (capsule.planTier == #signature and isSignatureRetentionExpired(capsule, now)) {
+        for (fileRef in capsule.fileRefs.vals()) {
+          let fileId = decodeFileRef(fileRef);
+          storedFiles.remove(fileId);
+        };
+        let updatedCapsule : Capsule = {
+          capsule with
+          fileRefs = [];
+        };
+        capsules.add(capsule.id, updatedCapsule);
+        purgedCapsuleCount += 1;
+      };
+    };
+    purgedCapsuleCount;
+  };
+
+  public shared ({ caller }) func getCapsuleNotificationPreferences(
+    publicId : Text
+  ) : async ?NotificationPreferences {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized");
+    };
+    let capsule = getCapsuleByPublicId(publicId);
+    if (capsule.creator != caller and not isAuthorizedAdmin(caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    capsuleNotificationPrefs.get(capsule.id);
   };
 
   public shared ({ caller }) func createPaymentIntent(
@@ -607,8 +1100,215 @@ persistent actor {
       expiresAt = now + PAYMENT_INTENT_TTL_NS;
       confirmedAt = null;
       usedByCapsuleId = null;
+      ownerEmail = null;
     };
     paymentIntents.add(intentId, intent);
+    toStatus(intent);
+  };
+
+  public shared ({ caller }) func createVoucherCampaign(
+    campaignId : Text,
+    tier : PlanTier,
+    expiresAt : ?Time.Time,
+    active : Bool,
+  ) : async VoucherCampaign {
+    if (not isAuthorizedAdmin(caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    if (tier == #free) {
+      Runtime.trap("Voucher campaigns cannot target free plan");
+    };
+    let normalizedCampaignId = normalizeCampaignId(campaignId);
+    if (normalizedCampaignId.size() < 3) {
+      Runtime.trap("Campaign id must be at least 3 characters");
+    };
+    switch (voucherCampaigns.get(normalizedCampaignId)) {
+      case (?_) { Runtime.trap("Campaign already exists"); };
+      case (null) {};
+    };
+    let now = Time.now();
+    let campaign : VoucherCampaign = {
+      id = normalizedCampaignId;
+      tier;
+      active;
+      expiresAt = campaignDefaultExpiry(now, expiresAt);
+      issuedCount = 0;
+      redeemedCount = 0;
+      createdAt = now;
+      updatedAt = now;
+    };
+    voucherCampaigns.add(normalizedCampaignId, campaign);
+    campaign;
+  };
+
+  public shared ({ caller }) func setVoucherCampaignActive(campaignId : Text, active : Bool) : async VoucherCampaign {
+    if (not isAuthorizedAdmin(caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    let normalizedCampaignId = normalizeCampaignId(campaignId);
+    let campaign = switch (voucherCampaigns.get(normalizedCampaignId)) {
+      case (null) { Runtime.trap("Campaign not found"); };
+      case (?value) { value };
+    };
+    let updated = {
+      campaign with
+      active;
+      updatedAt = Time.now();
+    };
+    voucherCampaigns.add(normalizedCampaignId, updated);
+    updated;
+  };
+
+  public shared ({ caller }) func issueVoucherCodes(
+    campaignId : Text,
+    codes : [Text],
+  ) : async Nat {
+    if (not isAuthorizedAdmin(caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    let normalizedCampaignId = normalizeCampaignId(campaignId);
+    let campaign = switch (voucherCampaigns.get(normalizedCampaignId)) {
+      case (null) { Runtime.trap("Campaign not found"); };
+      case (?value) { value };
+    };
+    let expiry = campaign.expiresAt;
+    var issuedNow : Nat = 0;
+    for (code in codes.vals()) {
+      let normalizedCode = normalizeVoucherCode(code);
+      if (normalizedCode.size() < 6) {
+        Runtime.trap("Voucher code too short");
+      };
+      if (inferCampaignPrefixFromCode(normalizedCode) != normalizedCampaignId) {
+        Runtime.trap("Voucher code prefix must match campaign id");
+      };
+      let fingerprint = voucherCodeFingerprint(normalizedCode);
+      switch (voucherCodeByFingerprint.get(fingerprint)) {
+        case (?_) { Runtime.trap("Duplicate voucher code"); };
+        case (null) {};
+      };
+      let now = Time.now();
+      voucherCodeByFingerprint.add(
+        fingerprint,
+        {
+          id = nextVoucherCodeIdText(normalizedCampaignId);
+          campaignId = normalizedCampaignId;
+          tier = campaign.tier;
+          codeFingerprint = fingerprint;
+          claimedBy = null;
+          redeemedAt = null;
+          redeemedByIntentId = null;
+          expiresAt = expiry;
+          createdAt = now;
+          updatedAt = now;
+        },
+      );
+      issuedNow += 1;
+    };
+    voucherCampaigns.add(
+      normalizedCampaignId,
+      {
+        campaign with
+        issuedCount = campaign.issuedCount + issuedNow;
+        updatedAt = Time.now();
+      },
+    );
+    issuedNow;
+  };
+
+  public query ({ caller }) func listVoucherCampaigns() : async [VoucherCampaign] {
+    if (not isAuthorizedAdmin(caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    voucherCampaigns.values().toArray().sort(func(a, b) { Text.compare(a.id, b.id) });
+  };
+
+  public shared ({ caller }) func redeemVoucherCode(
+    code : Text,
+    tier : PlanTier,
+  ) : async PaymentIntentStatus {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized");
+    };
+    if (tier == #free) {
+      Runtime.trap("Free plan does not require vouchers");
+    };
+    let fingerprint = voucherCodeFingerprint(code);
+    let voucher = switch (voucherCodeByFingerprint.get(fingerprint)) {
+      case (null) { Runtime.trap("Invalid voucher code"); };
+      case (?value) { value };
+    };
+    let campaign = switch (voucherCampaigns.get(voucher.campaignId)) {
+      case (null) { Runtime.trap("Campaign not found"); };
+      case (?value) { value };
+    };
+    if (not campaign.active) {
+      Runtime.trap("Voucher campaign is not active");
+    };
+    if (voucher.tier != tier) {
+      Runtime.trap("Voucher does not match selected plan");
+    };
+    let now = Time.now();
+    switch (voucher.expiresAt) {
+      case (?expiry) {
+        if (now > expiry) {
+          Runtime.trap("Voucher expired");
+        };
+      };
+      case (null) {};
+    };
+    switch (voucher.claimedBy) {
+      case (?claimedBy) {
+        if (claimedBy != caller) {
+          Runtime.trap("Voucher already claimed by another user");
+        };
+      };
+      case (null) {};
+    };
+    switch (voucher.redeemedByIntentId) {
+      case (?_) { Runtime.trap("Voucher already redeemed"); };
+      case (null) {};
+    };
+
+    let quote = planQuote(tier);
+    let intentId = nextIntentId(caller);
+    let intent : PaymentIntent = {
+      id = intentId;
+      creator = caller;
+      tier;
+      paymentMethod = #voucher;
+      provider = #voucher;
+      providerPaymentId = "voucher-" # voucher.id;
+      checkoutUrl = providerCheckoutBase(#voucher) # "/" # intentId;
+      amountUsdCents = 0;
+      currency = quote.currency;
+      status = #confirmed;
+      createdAt = now;
+      updatedAt = now;
+      expiresAt = now + PAYMENT_INTENT_TTL_NS;
+      confirmedAt = ?now;
+      usedByCapsuleId = null;
+      ownerEmail = null;
+    };
+    paymentIntents.add(intentId, intent);
+
+    voucherCodeByFingerprint.add(
+      fingerprint,
+      {
+        voucher with
+        claimedBy = ?caller;
+        redeemedAt = ?now;
+        redeemedByIntentId = ?intentId;
+        updatedAt = now;
+      },
+    );
+    voucherCampaigns.add(
+      voucher.campaignId,
+      {
+        campaign with
+        redeemedCount = campaign.redeemedCount + 1;
+        updatedAt = now;
+      },
+    );
     toStatus(intent);
   };
 
@@ -631,6 +1331,290 @@ persistent actor {
     toStatus(intent);
   };
 
+  public shared ({ caller }) func getPaymentIntentStatusForProvider(
+    intentId : Text,
+    webhookSecret : Text,
+  ) : async PaymentIntentStatus {
+    let expectedSecret = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?intent) {
+        switch (intent.provider) {
+          case (#stripe) { stripeWebhookSecret };
+          case (#coinbase) { coinbaseWebhookSecret };
+          case (#voucher) { null };
+        };
+      };
+    };
+
+    let authorized = if (isAuthorizedAdmin(caller)) {
+      true;
+    } else {
+      switch (expectedSecret) {
+        case (null) { false };
+        case (?secret) { webhookSecret == secret };
+      };
+    };
+    if (not authorized) {
+      Runtime.trap("Unauthorized provider payment status lookup");
+    };
+
+    let intent = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?pi) { pi };
+    };
+    if (intent.status == #pending and isExpired(intent)) {
+      let updated = { intent with status = #expired; updatedAt = Time.now() };
+      paymentIntents.add(intentId, updated);
+      return toStatus(updated);
+    };
+    toStatus(intent);
+  };
+
+  public shared ({ caller }) func setPaymentIntentOwnerEmailFromProvider(
+    intentId : Text,
+    ownerEmail : Text,
+    webhookSecret : Text,
+  ) : async () {
+    validateEmailOrTrap(ownerEmail);
+    let normalizedOwnerEmail = ownerEmail.toLower();
+    let expectedSecret = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?intent) {
+        switch (intent.provider) {
+          case (#stripe) { stripeWebhookSecret };
+          case (#coinbase) { coinbaseWebhookSecret };
+          case (#voucher) { null };
+        };
+      };
+    };
+
+    let authorized = if (isAuthorizedAdmin(caller)) {
+      true;
+    } else {
+      switch (expectedSecret) {
+        case (null) { false };
+        case (?secret) { webhookSecret == secret };
+      };
+    };
+    if (not authorized) {
+      Runtime.trap("Unauthorized provider email update");
+    };
+
+    let intent = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?pi) { pi };
+    };
+    paymentIntents.add(
+      intentId,
+      {
+        intent with
+        ownerEmail = ?normalizedOwnerEmail;
+        updatedAt = Time.now();
+      },
+    );
+  };
+
+  public shared ({ caller }) func getPaymentNotificationPreferencesForProvider(
+    intentId : Text,
+    webhookSecret : Text,
+  ) : async ?NotificationPreferences {
+    let expectedSecret = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?intent) {
+        switch (intent.provider) {
+          case (#stripe) { stripeWebhookSecret };
+          case (#coinbase) { coinbaseWebhookSecret };
+          case (#voucher) { null };
+        };
+      };
+    };
+
+    let authorized = if (isAuthorizedAdmin(caller)) {
+      true;
+    } else {
+      switch (expectedSecret) {
+        case (null) { false };
+        case (?secret) { webhookSecret == secret };
+      };
+    };
+    if (not authorized) {
+      Runtime.trap("Unauthorized provider preference lookup");
+    };
+    paymentNotificationPrefs.get(intentId);
+  };
+
+  public shared ({ caller }) func markCreationNoticeSentForProvider(
+    intentId : Text,
+    webhookSecret : Text,
+  ) : async () {
+    let expectedSecret = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?intent) {
+        switch (intent.provider) {
+          case (#stripe) { stripeWebhookSecret };
+          case (#coinbase) { coinbaseWebhookSecret };
+          case (#voucher) { null };
+        };
+      };
+    };
+
+    let authorized = if (isAuthorizedAdmin(caller)) {
+      true;
+    } else {
+      switch (expectedSecret) {
+        case (null) { false };
+        case (?secret) { webhookSecret == secret };
+      };
+    };
+    if (not authorized) {
+      Runtime.trap("Unauthorized provider creation-notice update");
+    };
+
+    let existing = switch (paymentNotificationPrefs.get(intentId)) {
+      case (null) { Runtime.trap("Notification preferences not found for intent"); };
+      case (?prefs) { prefs };
+    };
+    paymentNotificationPrefs.add(
+      intentId,
+      {
+        existing with
+        creationNoticeSentAt = ?Time.now();
+        updatedAt = Time.now();
+      },
+    );
+  };
+
+  public shared ({ caller }) func markUnlockReminderSentForProvider(
+    intentId : Text,
+    webhookSecret : Text,
+  ) : async () {
+    let expectedSecret = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?intent) {
+        switch (intent.provider) {
+          case (#stripe) { stripeWebhookSecret };
+          case (#coinbase) { coinbaseWebhookSecret };
+          case (#voucher) { null };
+        };
+      };
+    };
+    let authorized = if (isAuthorizedAdmin(caller)) {
+      true;
+    } else {
+      switch (expectedSecret) {
+        case (null) { false };
+        case (?secret) { webhookSecret == secret };
+      };
+    };
+    if (not authorized) {
+      Runtime.trap("Unauthorized provider unlock-reminder update");
+    };
+    let existing = switch (paymentNotificationPrefs.get(intentId)) {
+      case (null) { Runtime.trap("Notification preferences not found for intent"); };
+      case (?prefs) { prefs };
+    };
+    paymentNotificationPrefs.add(
+      intentId,
+      {
+        existing with
+        unlockReminderSentAt = ?Time.now();
+        updatedAt = Time.now();
+      },
+    );
+  };
+
+  public shared ({ caller }) func markExpiryReminderSentForProvider(
+    intentId : Text,
+    webhookSecret : Text,
+  ) : async () {
+    let expectedSecret = switch (paymentIntents.get(intentId)) {
+      case (null) { Runtime.trap("Payment intent not found"); };
+      case (?intent) {
+        switch (intent.provider) {
+          case (#stripe) { stripeWebhookSecret };
+          case (#coinbase) { coinbaseWebhookSecret };
+          case (#voucher) { null };
+        };
+      };
+    };
+    let authorized = if (isAuthorizedAdmin(caller)) {
+      true;
+    } else {
+      switch (expectedSecret) {
+        case (null) { false };
+        case (?secret) { webhookSecret == secret };
+      };
+    };
+    if (not authorized) {
+      Runtime.trap("Unauthorized provider expiry-reminder update");
+    };
+    let existing = switch (paymentNotificationPrefs.get(intentId)) {
+      case (null) { Runtime.trap("Notification preferences not found for intent"); };
+      case (?prefs) { prefs };
+    };
+    paymentNotificationPrefs.add(
+      intentId,
+      {
+        existing with
+        expiryReminderSentAt = ?Time.now();
+        updatedAt = Time.now();
+      },
+    );
+  };
+
+  public shared ({ caller }) func setMarketingOptInByOwnerEmailForProvider(
+    ownerEmail : Text,
+    marketingOptIn : Bool,
+    webhookSecret : Text,
+  ) : async Nat {
+    validateEmailOrTrap(ownerEmail);
+    let normalizedOwnerEmail = ownerEmail.toLower();
+    let authorized = if (AccessControl.isAdmin(accessControlState, caller)) {
+      true;
+    } else {
+      switch (stripeWebhookSecret) {
+        case (?secret) { webhookSecret == secret };
+        case (null) {
+          switch (coinbaseWebhookSecret) {
+            case (?coinbaseSecret) { webhookSecret == coinbaseSecret };
+            case (null) { false };
+          };
+        };
+      };
+    };
+    if (not authorized) {
+      Runtime.trap("Unauthorized provider marketing opt update");
+    };
+
+    var updates : Nat = 0;
+    for ((intentId, prefs) in paymentNotificationPrefs.entries()) {
+      if (prefs.ownerEmail == normalizedOwnerEmail) {
+        paymentNotificationPrefs.add(
+          intentId,
+          {
+            prefs with
+            marketingOptIn;
+            updatedAt = Time.now();
+          },
+        );
+        updates += 1;
+      };
+    };
+    for ((capsuleId, prefs) in capsuleNotificationPrefs.entries()) {
+      if (prefs.ownerEmail == normalizedOwnerEmail) {
+        capsuleNotificationPrefs.add(
+          capsuleId,
+          {
+            prefs with
+            marketingOptIn;
+            updatedAt = Time.now();
+          },
+        );
+      };
+    };
+    updates;
+  };
+
   public query ({ caller }) func getMyPaymentIntents() : async [PaymentIntentStatus] {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized");
@@ -646,11 +1630,43 @@ persistent actor {
     stripe : ?Text,
     coinbase : ?Text,
   ) : async () {
-    if (not AccessControl.isAdmin(accessControlState, caller)) {
+    if (not isAuthorizedAdmin(caller)) {
       Runtime.trap("Unauthorized");
     };
     stripeWebhookSecret := stripe;
     coinbaseWebhookSecret := coinbase;
+  };
+
+  public shared ({ caller }) func setLocalDevAdminBypassEnabled(enabled : Bool) : async () {
+    if (not AccessControl.isAdmin(accessControlState, caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    localDevAdminBypassEnabled := enabled;
+  };
+
+  public query ({ caller }) func getLocalDevAdminBypassEnabled() : async Bool {
+    if (not AccessControl.isAdmin(accessControlState, caller)) {
+      Runtime.trap("Unauthorized");
+    };
+    localDevAdminBypassEnabled;
+  };
+
+  // Self-test helper for the payments relay. Returns true iff the supplied
+  // webhook secret matches the value configured for `provider`. Returns false
+  // when no secret is configured or when the secret does not match. This lets
+  // the relay verify on startup that admin has run `configurePaymentWebhookSecrets`
+  // with the same value as `STRIPE_WEBHOOK_SECRET`, instead of waiting until a
+  // real payment fails.
+  public query func verifyPaymentWebhookSecret(provider : Text, candidateSecret : Text) : async Bool {
+    let configured = switch (provider) {
+      case ("stripe") { stripeWebhookSecret };
+      case ("coinbase") { coinbaseWebhookSecret };
+      case (_) { null };
+    };
+    switch (configured) {
+      case (null) { false };
+      case (?secret) { candidateSecret == secret };
+    };
   };
 
   public shared ({ caller }) func confirmPaymentIntent(
@@ -675,7 +1691,7 @@ persistent actor {
       case (?_) { true };
     };
 
-    if (requiresSecretCheck and not AccessControl.isAdmin(accessControlState, caller)) {
+    if (requiresSecretCheck and not isAuthorizedAdmin(caller)) {
       switch (expectedSecret) {
         case (null) {};
         case (?secret) {
@@ -718,5 +1734,329 @@ persistent actor {
     };
     paymentIntents.add(intentId, updated);
     toStatus(updated);
+  };
+
+  // ===========================================================================
+  // IC HTTP gateway — inbound Stripe webhook handler
+  // ===========================================================================
+  //
+  // Stripe Checkout (Payment Links) POSTs `checkout.session.completed` events
+  // to `https://<canister-id>.icp0.io/payments/stripe/webhook`. We:
+  //   1. Return `upgrade=true` from `http_request` so the boundary node
+  //      re-issues the call as `http_request_update` (state-mutating).
+  //   2. In `http_request_update`, verify HMAC-SHA256 against
+  //      `stripeWebhookSecret` (5min skew window), short-circuit on duplicate
+  //      `event.id`, then mark the matching payment intent as confirmed.
+  //
+  // Stripe expects a 2xx within ~10 seconds; update calls on the IC are well
+  // under that.
+
+  type HttpHeader = (Text, Text);
+
+  public type HttpRequest = {
+    method : Text;
+    url : Text;
+    headers : [HttpHeader];
+    body : Blob;
+    certificate_version : ?Nat16;
+  };
+
+  public type HttpResponse = {
+    status_code : Nat16;
+    headers : [HttpHeader];
+    body : Blob;
+    upgrade : ?Bool;
+  };
+
+  let STRIPE_WEBHOOK_PATH : Text = "/payments/stripe/webhook";
+  let STRIPE_HEALTH_PATH : Text = "/payments/health";
+  // Stripe's recommended timestamp skew tolerance for webhook signatures.
+  let STRIPE_WEBHOOK_TOLERANCE_SECONDS : Int = 300;
+
+  private func textResponse(status : Nat16, body : Text) : HttpResponse {
+    {
+      status_code = status;
+      headers = [
+        ("content-type", "text/plain; charset=utf-8"),
+        ("cache-control", "no-store"),
+      ];
+      body = Text.encodeUtf8(body);
+      upgrade = null;
+    };
+  };
+
+  private func upgradeResponse() : HttpResponse {
+    {
+      status_code = 200;
+      headers = [];
+      body = Text.encodeUtf8("");
+      upgrade = ?true;
+    };
+  };
+
+  // Strip query string from `url` so route matching is exact.
+  private func pathOnly(url : Text) : Text {
+    let parts = Text.split(url, #char '?');
+    switch (parts.next()) {
+      case (?p) { p };
+      case (null) { url };
+    };
+  };
+
+  // Find a header value (case-insensitive header name).
+  private func findHeader(headers : [HttpHeader], name : Text) : ?Text {
+    let lcName = name.toLower();
+    for ((k, v) in headers.vals()) {
+      if (k.toLower() == lcName) { return ?v };
+    };
+    null;
+  };
+
+  // Parse `t=NNN,v1=HEX[,v1=HEX...]` from the Stripe-Signature header.
+  // Returns `null` when malformed or missing required fields. Stripe may
+  // include multiple `v1=` values during signing-secret rotation; we accept
+  // the request if ANY of them matches the expected MAC.
+  private func parseStripeSignature(header : Text) : ?{ timestamp : Text; v1Hexes : [Text] } {
+    var timestamp : ?Text = null;
+    var v1Hexes : [Text] = [];
+    for (segment in Text.split(header, #char ',')) {
+      let trimmed = trimSpaces(segment);
+      let kvIter = Text.split(trimmed, #char '=');
+      switch (kvIter.next(), kvIter.next()) {
+        case (?k, ?v) {
+          if (k == "t") { timestamp := ?v };
+          if (k == "v1") { v1Hexes := Array.tabulate<Text>(v1Hexes.size() + 1, func(i) { if (i < v1Hexes.size()) { v1Hexes[i] } else { v } }) };
+        };
+        case _ {};
+      };
+    };
+    switch (timestamp) {
+      case (?ts) {
+        if (v1Hexes.size() == 0) { null } else { ?{ timestamp = ts; v1Hexes } };
+      };
+      case (null) { null };
+    };
+  };
+
+  private func trimSpaces(t : Text) : Text {
+    let chars = Iter.toArray<Char>(t.chars());
+    var start = 0;
+    var endIdx : Nat = chars.size();
+    while (start < endIdx and (chars[start] == ' ' or chars[start] == '\t')) {
+      start += 1;
+    };
+    while (endIdx > start and (chars[endIdx - 1] == ' ' or chars[endIdx - 1] == '\t')) {
+      endIdx -= 1;
+    };
+    var out = "";
+    var i = start;
+    while (i < endIdx) {
+      out #= Text.fromChar(chars[i]);
+      i += 1;
+    };
+    out;
+  };
+
+  private func parseNat(t : Text) : ?Nat {
+    var n : Nat = 0;
+    var any = false;
+    for (c in t.chars()) {
+      let code = Char.toNat32(c);
+      if (code >= 0x30 and code <= 0x39) {
+        n := n * 10 + Nat32ToNat(code - 0x30);
+        any := true;
+      } else {
+        return null;
+      };
+    };
+    if (any) { ?n } else { null };
+  };
+
+  private func Nat32ToNat(n : Nat32) : Nat {
+    // Wrap via Nat16 + high-word multiply; avoids pulling Nat32 into the
+    // top-level imports just for `toNat`.
+    let lo : Nat = Nat16.toNat(Nat16.fromNat32(n & 0xffff));
+    let hi : Nat = Nat16.toNat(Nat16.fromNat32((n >> 16) & 0xffff));
+    hi * 0x10000 + lo;
+  };
+
+  // Verify timestamp + at least one v1 signature against the expected secret.
+  // Returns true iff:
+  //   - timestamp parses as a Nat (epoch seconds),
+  //   - |now - timestamp| <= STRIPE_WEBHOOK_TOLERANCE_SECONDS,
+  //   - HMAC-SHA256(secret, "<t>.<rawBody>") matches one of the v1 hex digests
+  //     (constant-time compare).
+  private func verifyStripeWebhookSignature(
+    rawBody : Blob,
+    sigHeader : Text,
+    secret : Text,
+  ) : Bool {
+    switch (parseStripeSignature(sigHeader)) {
+      case (null) { false };
+      case (?parsed) {
+        switch (parseNat(parsed.timestamp)) {
+          case (null) { false };
+          case (?t) {
+            let nowSec : Int = Time.now() / 1_000_000_000;
+            let diff = if (nowSec >= t) { nowSec - t } else { t - nowSec };
+            if (diff > STRIPE_WEBHOOK_TOLERANCE_SECONDS) {
+              return false;
+            };
+            let signedPayload = Array.flatten<Nat8>([
+              Blob.toArray(Text.encodeUtf8(parsed.timestamp)),
+              Blob.toArray(Text.encodeUtf8(".")),
+              Blob.toArray(rawBody),
+            ]);
+            let mac = HmacSha256.mac(
+              Blob.toArray(Text.encodeUtf8(secret)),
+              signedPayload,
+            );
+            var matched = false;
+            for (hexSig in parsed.v1Hexes.vals()) {
+              switch (Hex.decode(hexSig)) {
+                case (?candidate) {
+                  if (HmacSha256.equalConstantTime(mac, candidate)) {
+                    matched := true;
+                  };
+                };
+                case (null) {};
+              };
+            };
+            matched;
+          };
+        };
+      };
+    };
+  };
+
+  // Apply a verified Stripe webhook event to local state. Returns the HTTP
+  // status the canister should reply with.
+  private func applyStripeWebhookEvent(bodyText : Text) : Nat16 {
+    let eventId = switch (JsonExtract.findString(bodyText, "id")) {
+      case (?id) { id };
+      case (null) { return 400 };
+    };
+    if (Set.contains(processedStripeEventIds, eventId)) {
+      // Replay of an already-applied event: 200 keeps Stripe happy without
+      // double-processing.
+      return 200;
+    };
+
+    let eventType = switch (JsonExtract.findString(bodyText, "type")) {
+      case (?t) { t };
+      case (null) { return 400 };
+    };
+
+    let intentId = switch (JsonExtract.findString(bodyText, "client_reference_id")) {
+      case (?id) { id };
+      case (null) {
+        // Stripe events without a client_reference_id are ignored (we only
+        // match the ones the SPA initiated). Mark processed so retries stop.
+        Set.add(processedStripeEventIds, eventId);
+        return 200;
+      };
+    };
+
+    let intent = switch (paymentIntents.get(intentId)) {
+      case (?pi) { pi };
+      case (null) {
+        // Unknown intent (already pruned, or webhook arrived for a different
+        // canister deployment). Acknowledge to silence retries.
+        Set.add(processedStripeEventIds, eventId);
+        return 200;
+      };
+    };
+
+    let now = Time.now();
+    let target : ?PaymentStatus = if (eventType == "checkout.session.completed") {
+      ?#confirmed;
+    } else if (eventType == "checkout.session.async_payment_failed") {
+      ?#failed;
+    } else if (eventType == "checkout.session.expired") {
+      ?#expired;
+    } else {
+      null;
+    };
+
+    switch (target) {
+      case (null) {
+        // Other event types (e.g. session.created) are noise for our flow;
+        // acknowledge to stop retries.
+        Set.add(processedStripeEventIds, eventId);
+      };
+      case (?nextStatus) {
+        if (intent.status == #pending) {
+          let confirmedAt : ?Time.Time = if (nextStatus == #confirmed) ?now else null;
+          let updated = {
+            intent with
+            status = nextStatus;
+            updatedAt = now;
+            confirmedAt = confirmedAt;
+          };
+          paymentIntents.add(intentId, updated);
+        };
+        Set.add(processedStripeEventIds, eventId);
+      };
+    };
+    200;
+  };
+
+  // ----- public HTTP gateway endpoints -----
+
+  public query func http_request(req : HttpRequest) : async HttpResponse {
+    let path = pathOnly(req.url);
+    if (req.method == "POST" and path == STRIPE_WEBHOOK_PATH) {
+      // State-mutating: ask the boundary node to re-call as an update.
+      return upgradeResponse();
+    };
+    if (req.method == "GET" and path == STRIPE_HEALTH_PATH) {
+      // Re-issue as update so the response bypasses query-response
+      // certification (we don't certify any of our HTTP responses).
+      return upgradeResponse();
+    };
+    upgradeResponse();
+  };
+
+  public func http_request_update(req : HttpRequest) : async HttpResponse {
+    let path = pathOnly(req.url);
+    if (req.method == "GET" and path == STRIPE_HEALTH_PATH) {
+      return textResponse(200, "ok");
+    };
+    if (not (req.method == "POST" and path == STRIPE_WEBHOOK_PATH)) {
+      return textResponse(404, "Not found");
+    };
+    let secret = switch (stripeWebhookSecret) {
+      case (?s) { s };
+      case (null) { return textResponse(503, "Stripe webhook secret not configured") };
+    };
+    let sigHeader = switch (findHeader(req.headers, "stripe-signature")) {
+      case (?h) { h };
+      case (null) { return textResponse(400, "Missing Stripe-Signature header") };
+    };
+    if (not verifyStripeWebhookSignature(req.body, sigHeader, secret)) {
+      return textResponse(400, "Bad signature");
+    };
+    let bodyText = switch (Text.decodeUtf8(req.body)) {
+      case (?t) { t };
+      case (null) { return textResponse(400, "Body is not valid UTF-8") };
+    };
+    let status = applyStripeWebhookEvent(bodyText);
+    textResponse(status, "ok");
+  };
+
+  // Self-test query method for the bootstrap script. Returns true iff a
+  // webhook secret is currently configured for `provider`. Used by the slim
+  // bootstrap script to verify `configurePaymentWebhookSecrets` actually
+  // landed on the canister after a deploy.
+  public query func _paymentsConfigured(provider : Text) : async Bool {
+    let configured = switch (provider) {
+      case ("stripe") { stripeWebhookSecret };
+      case ("coinbase") { coinbaseWebhookSecret };
+      case (_) { null };
+    };
+    switch (configured) {
+      case (null) { false };
+      case (?_) { true };
+    };
   };
 };

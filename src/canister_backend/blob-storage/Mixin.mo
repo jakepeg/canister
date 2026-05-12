@@ -11,7 +11,7 @@ import Runtime "mo:core/Runtime";
 mixin() {
   type ExternalBlob = Storage.ExternalBlob;
 
-  transient let _caffeineStorageState : Storage.State = Storage.new();
+  let _caffeineStorageState : Storage.State = Storage.new();
 
   type _CaffeineStorageRefillInformation = {
     proposed_top_up_amount : ?Nat;

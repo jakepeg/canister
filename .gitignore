@@ -24,6 +24,7 @@ dist/
 .env.*.local
 .env.*
 !.env.example
+!.env.production.example
 
 # local helper artifacts
 .tmp_*

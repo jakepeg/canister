@@ -1,11 +1,24 @@
 import { Button } from "@/components/ui/button";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { UserRole } from "../backend";
+import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
 import logo from "../assets/logo.svg";
 
 export default function NavBar() {
   const { identity, login, clear, isLoggingIn } = useInternetIdentity();
+  const { actor } = useActor();
   const navigate = useNavigate();
+  const roleQuery = useQuery({
+    queryKey: ["navbarCallerRole", identity?.getPrincipal().toString()],
+    queryFn: async () => {
+      if (!actor || !identity) return null;
+      return actor.getCallerUserRole();
+    },
+    enabled: Boolean(actor && identity),
+  });
+  const isAdmin = roleQuery.data === UserRole.admin;
 
   function handleSignOut() {
     clear();
@@ -41,6 +54,16 @@ export default function NavBar() {
               >
                 <Link to="/create">Create Canister</Link>
               </Button>
+              {isAdmin && (
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="sm"
+                  className="text-[#f2efe8]/85 hover:bg-[rgb(216_178_116)] hover:text-[#f2efe8]"
+                >
+                  <Link to="/admin/vouchers">Vouchers</Link>
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"

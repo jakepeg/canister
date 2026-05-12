@@ -56,11 +56,23 @@ export interface PaymentIntentStatus {
   confirmedAt?: bigint;
   usedByCapsuleId?: bigint;
   checkoutUrl: string;
+  ownerEmail?: string;
 }
 
-export interface StripeClientSecretResult {
-  stripePaymentIntentId: string;
-  clientSecret: string;
+export type ReminderTarget = "owner" | "other";
+
+export interface PaymentNotificationPreferences {
+  ownerEmail: string;
+  recipientEmail?: string;
+  reminderTarget: ReminderTarget;
+  reminderOptIn: boolean;
+  marketingOptIn: boolean;
+  notifyRecipientOnCreation: boolean;
+  hasRecipientPermission: boolean;
+  reminderConsentAt?: bigint;
+  marketingConsentAt?: bigint;
+  creationNoticeSentAt?: bigint;
+  updatedAt: bigint;
 }
 
 const toVariant = <T extends string>(value: T): { [K in T]: null } =>
@@ -170,7 +182,7 @@ export function usePricingPlans() {
   return useQuery<PlanQuote[]>({
     queryKey: ["pricingPlans"],
     queryFn: async () => {
-      if (!actor) return FALLBACK_PRICING_PLANS;
+      if (!actor) return [];
       try {
         const plans = await (actor as any).getPricingPlans();
         const mapped = plans.map((plan: any) => ({
@@ -180,9 +192,18 @@ export function usePricingPlans() {
           currency: plan.currency,
           includedCanisters: plan.includedCanisters,
         }));
-        return mapped.length > 0 ? mapped : FALLBACK_PRICING_PLANS;
-      } catch {
-        return FALLBACK_PRICING_PLANS;
+        if (mapped.length === 0) {
+          if (import.meta.env.PROD) {
+            console.warn("[pricing] Backend returned no plans in production.");
+          }
+          return [];
+        }
+        return mapped;
+      } catch (error) {
+        if (import.meta.env.PROD) {
+          console.warn("[pricing] Failed to fetch backend pricing in production.", error);
+        }
+        return [];
       }
     },
     enabled: !!actor && !isFetching,
@@ -210,45 +231,8 @@ export function useCreatePaymentIntent() {
         confirmedAt: fromOptional(intent.confirmedAt),
         usedByCapsuleId: fromOptional(intent.usedByCapsuleId),
         checkoutUrl: intent.checkoutUrl,
+        ownerEmail: fromOptional(intent.ownerEmail),
       } satisfies PaymentIntentStatus;
-    },
-  });
-}
-
-export function useCreateStripeClientSecret() {
-  return useMutation({
-    mutationFn: async (params: {
-      intentId: string;
-      amountUsdCents: bigint;
-      planName: string;
-    }) => {
-      const relayBaseUrl = import.meta.env.VITE_PAYMENTS_RELAY_BASE_URL ?? "";
-      const response = await fetch(`${relayBaseUrl}/payments/stripe/payment-intent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          intentId: params.intentId,
-          amountUsdCents: params.amountUsdCents.toString(),
-          planName: params.planName,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to initialize Stripe payment.");
-      }
-
-      const payload = (await response.json()) as {
-        id?: string;
-        clientSecret?: string;
-      };
-      if (!payload.id || !payload.clientSecret) {
-        throw new Error("Invalid Stripe payment intent response.");
-      }
-
-      return {
-        stripePaymentIntentId: payload.id,
-        clientSecret: payload.clientSecret,
-      } satisfies StripeClientSecretResult;
     },
   });
 }
@@ -272,6 +256,7 @@ export function usePaymentIntentStatus(intentId: string | null) {
         confirmedAt: fromOptional(intent.confirmedAt),
         usedByCapsuleId: fromOptional(intent.usedByCapsuleId),
         checkoutUrl: intent.checkoutUrl,
+        ownerEmail: fromOptional(intent.ownerEmail),
       };
     },
     enabled: !!actor && !isFetching && !!intentId,
@@ -311,7 +296,72 @@ export function useConfirmPaymentIntent() {
         confirmedAt: fromOptional(intent.confirmedAt),
         usedByCapsuleId: fromOptional(intent.usedByCapsuleId),
         checkoutUrl: intent.checkoutUrl,
+        ownerEmail: fromOptional(intent.ownerEmail),
       } satisfies PaymentIntentStatus;
+    },
+  });
+}
+
+export function usePaymentNotificationPreferences(intentId: string | null) {
+  const { actor, isFetching } = useActor();
+  return useQuery<PaymentNotificationPreferences | null>({
+    queryKey: ["paymentNotificationPreferences", intentId],
+    queryFn: async () => {
+      if (!actor || !intentId) return null;
+      const prefs = await (actor as any).getPaymentNotificationPreferences(intentId);
+      if (!prefs || prefs.length === 0) return null;
+      const value = prefs[0];
+      return {
+        ownerEmail: value.ownerEmail,
+        recipientEmail: fromOptional(value.recipientEmail),
+        reminderTarget: fromVariant<ReminderTarget>(value.reminderTarget),
+        reminderOptIn: value.reminderOptIn,
+        marketingOptIn: value.marketingOptIn,
+        notifyRecipientOnCreation: value.notifyRecipientOnCreation,
+        hasRecipientPermission: value.hasRecipientPermission,
+        reminderConsentAt: fromOptional(value.reminderConsentAt),
+        marketingConsentAt: fromOptional(value.marketingConsentAt),
+        creationNoticeSentAt: fromOptional(value.creationNoticeSentAt),
+        updatedAt: value.updatedAt,
+      } satisfies PaymentNotificationPreferences;
+    },
+    enabled: !!actor && !isFetching && !!intentId,
+  });
+}
+
+export function useSavePaymentNotificationPreferences() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      intentId: string;
+      ownerEmail: string;
+      reminderTarget: ReminderTarget;
+      recipientEmail?: string;
+      reminderOptIn: boolean;
+      marketingOptIn: boolean;
+      notifyRecipientOnCreation: boolean;
+      hasRecipientPermission: boolean;
+    }) => {
+      if (!actor) throw new Error("Not connected");
+      await (actor as any).savePaymentNotificationPreferences(
+        params.intentId,
+        params.ownerEmail,
+        toVariant(params.reminderTarget),
+        params.recipientEmail ? [params.recipientEmail] : [],
+        params.reminderOptIn,
+        params.marketingOptIn,
+        params.notifyRecipientOnCreation,
+        params.hasRecipientPermission,
+      );
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["paymentNotificationPreferences", variables.intentId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["paymentIntentStatus", variables.intentId],
+      });
     },
   });
 }

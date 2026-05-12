@@ -47,6 +47,11 @@
     /* Amber/gold for sealed state */
     --amber: 0.75 0.18 65;
     --amber-foreground: 0.08 0.012 264;
+    /* Semantic aliases */
+    --sales: 0.75 0.18 65;
+    --sales-foreground: 0.08 0.012 264;
+    --utility: 0.72 0.17 207;
+    --utility-foreground: 0.06 0.012 264;
 
     /* Borders */
     --border: 0.22 0.03 264 / 60%;

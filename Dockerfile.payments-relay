@@ -1,0 +1,13 @@
+# Payments relay: expose services/payments-relay/server.mjs behind HTTPS at your edge
+# (reverse proxy / load balancer). Example: docker run -p 8787:8787 --env-file .env ...
+FROM node:20-alpine
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY services/payments-relay ./services/payments-relay
+
+ENV NODE_ENV=production
+EXPOSE 8787
+CMD ["node", "services/payments-relay/server.mjs"]

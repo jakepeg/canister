@@ -52,7 +52,7 @@ const TRUST_POINTS = [
   {
     icon: <Infinity className="w-5 h-5" />,
     title: "Unstoppable",
-    description: "Permanent, decentralized storage - always available.",
+    description: "Long-horizon decentralized storage with explicit retention policies.",
   },
 ];
 
@@ -62,9 +62,9 @@ const PRICING_TIERS = [
     price: "Free",
     subtitle: "For your first sealed memory",
     features: [
-      "Create and seal your first digital canister",
-      "Future unlock date and access key sharing",
-      "Privacy-first encrypted storage",
+      "One free capsule with up to 200 characters",
+      "No file uploads and up to 1-year unlock horizon",
+      "Encrypted message and verifiable unlock controls",
     ],
     highlighted: false,
   },
@@ -74,9 +74,9 @@ const PRICING_TIERS = [
     subtitle: "One-time per canister",
     features: [
       "Everything in Essential",
-      "Larger storage for richer media and documents",
-      "Priority reliability on decentralized infrastructure",
-      "Enhanced presentation for shared unlock experiences",
+      "Up to 5 files, 5MB each (25MB total)",
+      "Unlock date up to 5 years ahead",
+      "30-day post-unlock download window",
     ],
     highlighted: true,
   },
@@ -85,10 +85,11 @@ const PRICING_TIERS = [
     price: "$39",
     subtitle: "One-time per canister",
     features: [
-      "Everything in Signature",
-      "Expanded capacity for multiple canisters",
-      "Premium support for high-value archives",
-      "Early access to upcoming physical keepsake options",
+      "Up to 10 files, 10MB each (100MB total)",
+      "Unlock date up to 50 years ahead",
+      "Built for long-term storage",
+      "Lifetime retention goal, subject to network availability and protocol continuity.",
+      "Designed for premium archive use cases",
     ],
     highlighted: false,
   },
@@ -172,7 +173,10 @@ export default function LandingPage() {
       </section>
 
       {/* ── How It Works ── */}
-      <section id="how-it-works" className="pt-24 pb-32 px-4">
+      <section
+        id="how-it-works"
+        className="px-4 py-16 sm:py-20 lg:py-24"
+      >
         <div className="container mx-auto max-w-5xl">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -222,7 +226,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── Technical Trust Points ── */}
-      <section className="py-20 px-4">
+      <section className="px-4 py-16 sm:py-20 lg:py-24">
         <div className="container mx-auto max-w-5xl">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -261,7 +265,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── Pricing ── */}
-      <section id="pricing" className="py-24 px-4">
+      <section id="pricing" className="px-4 py-16 sm:py-20 lg:py-24">
         <div className="container mx-auto max-w-5xl">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -332,7 +336,8 @@ export default function LandingPage() {
                           : "legacy",
                     )
                   }
-                  className="mt-6 w-full rounded-sm bg-primary text-primary-foreground hover:bg-primary/90"
+                  variant="sales"
+                  className="mt-6 w-full rounded-sm"
                 >
                   Choose {tier.name}
                 </Button>
@@ -343,7 +348,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── CTA Banner ── */}
-      <section className="py-24 px-4">
+      <section className="px-4 py-16 sm:py-20 lg:py-24">
         <div className="container mx-auto max-w-3xl">
           <motion.div
             initial={{ opacity: 0, scale: 0.96 }}
@@ -356,7 +361,7 @@ export default function LandingPage() {
               aria-hidden
             />
             <h2 className="font-display text-3xl md:text-4xl font-bold text-[#f2efe8] mb-4 relative">
-              Give your most meaningful moments a permanent home.
+              Give your most meaningful moments a long-horizon home.
             </h2>
             <p className="text-[#f2efe8]/72 mb-8 relative">
               Private by design, protected by decentralized infrastructure.

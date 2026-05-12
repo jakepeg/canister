@@ -9,7 +9,10 @@
     "deploy:ic": "node scripts/run-with-dfx.mjs ic",
     "dev:all": "node scripts/dev-all.mjs",
     "dev:local": "node scripts/run-with-dfx.mjs local",
+    "payments:bootstrap": "node scripts/bootstrap-payments.mjs",
+    "payments:bootstrap:ic": "node scripts/bootstrap-payments.mjs --network ic --identity bootstrap-admin",
     "payments:relay": "node services/payments-relay/server.mjs",
+    "vouchers:seed:local": "node scripts/seed-local-vouchers.mjs",
     "prebuild": "npm run prebuild --workspaces --if-present",
     "pretest": "npm run prebuild --workspaces --if-present",
     "start": "npm start --workspaces --if-present",
@@ -25,6 +28,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
+    "resend": "^4.8.0",
     "stripe": "^18.3.0"
   },
   "devDependencies": {
