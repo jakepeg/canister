@@ -37,7 +37,7 @@ call confirmPaymentIntent "(\"${INTENT_ID}\", \"${PROVIDER_PAYMENT_ID}\", varian
 
 echo ""
 echo "=== STEP 3: Create Signature capsule (unlock 10d out) ==="
-call createCapsule "(\"public-id-sig-test-aaaaaaaa\", \"Sig Test\", \"hello\", vec {}, ${UNLOCK_NS} : int, 5 : nat, opt \"${INTENT_ID}\")" 2>&1 | tail -3
+call createCapsule "(\"public-id-sig-test-aaaaaaaa\", \"Sig Test\", \"hello\", vec {}, ${UNLOCK_NS} : int, 5 : nat, opt \"${INTENT_ID}\", false)" 2>&1 | tail -3
 
 PUBLIC_ID="public-id-sig-test-aaaaaaaa"
 

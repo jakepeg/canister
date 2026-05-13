@@ -75,6 +75,9 @@ export interface PaymentNotificationPreferences {
   updatedAt: bigint;
 }
 
+/** Same payload as payment notification prefs; stored per capsule id on-chain. */
+export type CapsuleNotificationPreferences = PaymentNotificationPreferences;
+
 const toVariant = <T extends string>(value: T): { [K in T]: null } =>
   ({ [value]: null }) as { [K in T]: null };
 
@@ -158,6 +161,8 @@ export function useCreateCapsule() {
       unlockDate: bigint;
       messageCharCount: number;
       paymentIntentId?: string;
+      /** Paid plans only; creates a draft you can edit from the dashboard. */
+      saveAsDraft?: boolean;
     }) => {
       if (!actor) throw new Error("Not connected");
       return actor.createCapsule(
@@ -168,11 +173,87 @@ export function useCreateCapsule() {
         params.unlockDate,
         BigInt(params.messageCharCount),
         params.paymentIntentId ? [params.paymentIntentId] : [],
+        params.saveAsDraft ?? false,
       );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["myCapsules"] });
       queryClient.invalidateQueries({ queryKey: ["totalCapsuleCount"] });
+    },
+  });
+}
+
+export function useAppendCapsuleFiles() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      publicId: string;
+      fileRefs: ExternalBlob[];
+      filesEncrypted: boolean;
+    }) => {
+      if (!actor) throw new Error("Not connected");
+      await actor.appendCapsuleFiles(
+        params.publicId,
+        params.fileRefs,
+        params.filesEncrypted,
+      );
+    },
+    onSuccess: (_, params) => {
+      queryClient.invalidateQueries({ queryKey: ["myCapsules"] });
+      queryClient.invalidateQueries({
+        queryKey: ["capsuleMetadata", params.publicId],
+      });
+    },
+  });
+}
+
+export function useLockCapsule() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (publicId: string) => {
+      if (!actor) throw new Error("Not connected");
+      await actor.lockCapsule(publicId);
+    },
+    onSuccess: (_, publicId) => {
+      queryClient.invalidateQueries({ queryKey: ["myCapsules"] });
+      queryClient.invalidateQueries({
+        queryKey: ["capsuleMetadata", publicId],
+      });
+    },
+  });
+}
+
+export function useDeleteCapsule() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (publicId: string) => {
+      if (!actor) throw new Error("Not connected");
+      await actor.deleteCapsule(publicId);
+    },
+    onSuccess: (_, publicId) => {
+      queryClient.invalidateQueries({ queryKey: ["myCapsules"] });
+      queryClient.invalidateQueries({ queryKey: ["totalCapsuleCount"] });
+      queryClient.invalidateQueries({ queryKey: ["capsuleMetadata", publicId] });
+    },
+  });
+}
+
+export function useUpdateCapsuleTitle() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { publicId: string; title: string }) => {
+      if (!actor) throw new Error("Not connected");
+      await actor.updateCapsuleTitle(params.publicId, params.title);
+    },
+    onSuccess: (_, params) => {
+      queryClient.invalidateQueries({ queryKey: ["myCapsules"] });
+      queryClient.invalidateQueries({
+        queryKey: ["capsuleMetadata", params.publicId],
+      });
     },
   });
 }
@@ -362,6 +443,99 @@ export function useSavePaymentNotificationPreferences() {
       queryClient.invalidateQueries({
         queryKey: ["paymentIntentStatus", variables.intentId],
       });
+    },
+  });
+}
+
+function mapNotificationPreferencesRecord(value: {
+  ownerEmail: string;
+  recipientEmail?: [] | [string];
+  reminderTarget: unknown;
+  reminderOptIn: boolean;
+  marketingOptIn: boolean;
+  notifyRecipientOnCreation: boolean;
+  hasRecipientPermission: boolean;
+  reminderConsentAt?: [] | [bigint];
+  marketingConsentAt?: [] | [bigint];
+  creationNoticeSentAt?: [] | [bigint];
+  updatedAt: bigint;
+}): CapsuleNotificationPreferences {
+  return {
+    ownerEmail: value.ownerEmail,
+    recipientEmail: fromOptional(value.recipientEmail),
+    reminderTarget: fromVariant<ReminderTarget>(value.reminderTarget),
+    reminderOptIn: value.reminderOptIn,
+    marketingOptIn: value.marketingOptIn,
+    notifyRecipientOnCreation: value.notifyRecipientOnCreation,
+    hasRecipientPermission: value.hasRecipientPermission,
+    reminderConsentAt: fromOptional(value.reminderConsentAt),
+    marketingConsentAt: fromOptional(value.marketingConsentAt),
+    creationNoticeSentAt: fromOptional(value.creationNoticeSentAt),
+    updatedAt: value.updatedAt,
+  } satisfies CapsuleNotificationPreferences;
+}
+
+function unwrapCapsuleNotificationPrefs(
+  raw: unknown,
+): CapsuleNotificationPreferences | null {
+  if (raw == null) return null;
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return null;
+    const first = raw[0];
+    if (first == null) return null;
+    return mapNotificationPreferencesRecord(
+      first as Parameters<typeof mapNotificationPreferencesRecord>[0],
+    );
+  }
+  return mapNotificationPreferencesRecord(
+    raw as Parameters<typeof mapNotificationPreferencesRecord>[0],
+  );
+}
+
+export function useCapsuleNotificationPreferences(publicId: string | null) {
+  const { actor, isFetching } = useActor();
+  return useQuery<CapsuleNotificationPreferences | null>({
+    queryKey: ["capsuleNotificationPreferences", publicId],
+    queryFn: async () => {
+      if (!actor || !publicId) return null;
+      const raw = await actor.getCapsuleNotificationPreferences(publicId);
+      return unwrapCapsuleNotificationPrefs(raw);
+    },
+    enabled: !!actor && !isFetching && !!publicId,
+  });
+}
+
+export function useSaveCapsuleNotificationPreferences() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      publicId: string;
+      ownerEmail: string;
+      reminderTarget: ReminderTarget;
+      recipientEmail?: string;
+      reminderOptIn: boolean;
+      marketingOptIn: boolean;
+      notifyRecipientOnCreation: boolean;
+      hasRecipientPermission: boolean;
+    }) => {
+      if (!actor) throw new Error("Not connected");
+      await actor.saveCapsuleNotificationPreferences(
+        params.publicId,
+        params.ownerEmail,
+        toVariant(params.reminderTarget),
+        params.recipientEmail ? [params.recipientEmail] : [],
+        params.reminderOptIn,
+        params.marketingOptIn,
+        params.notifyRecipientOnCreation,
+        params.hasRecipientPermission,
+      );
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["capsuleNotificationPreferences", variables.publicId],
+      });
+      queryClient.invalidateQueries({ queryKey: ["myCapsules"] });
     },
   });
 }

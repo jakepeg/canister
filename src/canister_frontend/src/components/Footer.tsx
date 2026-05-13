@@ -1,5 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import logo from "../assets/logo.svg";
 import onChainLogo from "../assets/on-chain.png";
 
 const FOOTER_LINKS = [
@@ -17,17 +16,9 @@ export default function Footer() {
     <footer className="border-t border-[#c9a763]/20 bg-[#070707] px-4 py-10">
       <div className="mx-auto w-full max-w-6xl">
         <div className="flex flex-col gap-7 border-b border-[#c9a763]/15 pb-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <img src={logo} alt="Canister logo" className="h-8 w-8 rounded-full" />
-            <div className="flex flex-col">
-              <span className="font-display text-base tracking-[0.14em] text-[#f2efe8]">
-                CANISTER
-              </span>
-              <span className="text-xs text-[#f2efe8]/70">
-                © 2026
-              </span>
-            </div>
-          </div>
+          <p className="text-sm text-[#f2efe8]/80">
+            Copyright © 2026 Canister Co.
+          </p>
 
           <nav className="flex flex-wrap items-center gap-y-3 text-xs uppercase tracking-[0.14em] text-[#f2efe8]/80">
             {FOOTER_LINKS.map((link, index) => (

@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -40,6 +41,7 @@ import QRCode from "../components/QRCode";
 import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
 import { trackEvent } from "../lib/analytics";
+import { encryptBytesWithAesGcm } from "../lib/capsuleCrypto";
 import {
   useCreateCapsule,
   usePaymentNotificationPreferences,
@@ -98,6 +100,21 @@ async function encryptMessage(
   return { encryptedMessage, keyBase64 };
 }
 
+/** Client-side shape check before calling the canister (codes look like CAMPAIGN-SUFFIX). */
+function validateVoucherCodeFormat(code: string): string | null {
+  const c = code.trim();
+  if (c.length < 6) {
+    return "Enter a complete voucher code (for example CAMPAIGN-CODE).";
+  }
+  if (!/^[A-Z0-9-]+$/.test(c)) {
+    return "Use only letters, numbers, and hyphens (format: CAMPAIGN-CODE).";
+  }
+  if (!c.includes("-")) {
+    return "Voucher codes include a hyphen (for example CAMPAIGN-CODE).";
+  }
+  return null;
+}
+
 export default function CreateCapsule() {
   const { identity, login } = useInternetIdentity();
   const { actor } = useActor();
@@ -117,6 +134,7 @@ export default function CreateCapsule() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("card");
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [voucherCode, setVoucherCode] = useState("");
+  const [voucherRedeemError, setVoucherRedeemError] = useState<string | null>(null);
   const paymentIntentStatus = usePaymentIntentStatus(paymentIntentId);
   const paymentNotificationPreferences = usePaymentNotificationPreferences(paymentIntentId);
   const [isDragging, setIsDragging] = useState(false);
@@ -180,6 +198,7 @@ export default function CreateCapsule() {
     setPreferencesHydratedForIntent(null);
     setCreationNoticeTriggeredForIntent(null);
     setVoucherCode("");
+    setVoucherRedeemError(null);
   }, [selectedPlan]);
 
   useEffect(() => {
@@ -197,6 +216,7 @@ export default function CreateCapsule() {
     setCreationNoticeTriggeredForIntent(null);
     if (paymentMethod !== "voucher") {
       setVoucherCode("");
+      setVoucherRedeemError(null);
     }
   }, [paymentMethod]);
 
@@ -282,7 +302,7 @@ export default function CreateCapsule() {
     "Confirming transaction...",
   ];
 
-  async function handleSeal() {
+  async function submitCapsule(saveAsDraft: boolean) {
     if (!identity) return;
     trackEvent("capsule_seal_submitted", {
       plan_tier: selectedPlan ?? "unknown",
@@ -290,6 +310,7 @@ export default function CreateCapsule() {
       file_count: files.length,
       message_char_count: message.length,
       unlock_delay_days: daysUntil ?? undefined,
+      save_as_draft: saveAsDraft,
     });
     setIsSealing(true);
     setSealingStage(0);
@@ -299,12 +320,13 @@ export default function CreateCapsule() {
       const { encryptedMessage, keyBase64 } = await encryptMessage(message);
       setSealingStage(1);
 
-      // Stage 1: upload files to canister and collect file references
+      // Stage 1: upload files to canister and collect file references (AES-GCM with same key as message)
       const fileBlobs: ExternalBlob[] = [];
       const encoder = new TextEncoder();
       for (const sf of files) {
         const arrayBuffer = await sf.file.arrayBuffer();
-        const fileBytes = new Uint8Array(arrayBuffer);
+        const rawBytes = new Uint8Array(arrayBuffer);
+        const fileBytes = await encryptBytesWithAesGcm(rawBytes, keyBase64);
         if (!actor) {
           throw new Error("Not connected");
         }
@@ -329,8 +351,23 @@ export default function CreateCapsule() {
         unlockDate: unlockDateBigInt,
         messageCharCount: message.length,
         paymentIntentId: selectedPlan === "free" ? undefined : paymentIntentId ?? undefined,
+        saveAsDraft,
       });
       setSealingStage(3);
+
+      if (saveAsDraft) {
+        trackEvent("capsule_draft_saved", {
+          capsule_id: capsuleId,
+          plan_tier: selectedPlan ?? "unknown",
+          file_count: files.length,
+        });
+        toast.success(
+          "Draft saved. Add files or finalize your canister anytime from the dashboard.",
+        );
+        setIsSealing(false);
+        navigate({ to: "/dashboard" });
+        return;
+      }
 
       // Build claim URL
       const url = `${window.location.origin}/claim/${capsuleId}#${keyBase64}`;
@@ -354,6 +391,7 @@ export default function CreateCapsule() {
         stage: SEALING_STAGES[sealingStage] ?? "unknown",
         error_message: err instanceof Error ? err.message : "Failed to seal canister",
         plan_tier: selectedPlan ?? "unknown",
+        save_as_draft: saveAsDraft,
       });
       setIsSealing(false);
       toast.error(
@@ -445,20 +483,37 @@ export default function CreateCapsule() {
 
   async function handleRedeemVoucher() {
     if (!selectedPlan || selectedPlan === "free") return;
+    setVoucherRedeemError(null);
     if (!voucherCode.trim()) {
-      toast.error("Enter a voucher code.");
+      const msg = "Enter a voucher code.";
+      setVoucherRedeemError(msg);
+      toast.error(msg);
+      return;
+    }
+    const formatErr = validateVoucherCodeFormat(voucherCode.trim());
+    if (formatErr) {
+      setVoucherRedeemError(formatErr);
+      toast.error(formatErr);
       return;
     }
     const tier = selectedPlan === "legacy" ? "legacy" : "signature";
-    const result = await redeemVoucherCode.mutateAsync({
-      code: voucherCode.trim(),
-      tier,
-    });
-    setPaymentIntentId(result.id);
-    if (result.ownerEmail) {
-      setOwnerEmail((current) => current || result.ownerEmail || "");
+    try {
+      const result = await redeemVoucherCode.mutateAsync({
+        code: voucherCode.trim(),
+        tier,
+      });
+      setPaymentIntentId(result.id);
+      if (result.ownerEmail) {
+        setOwnerEmail((current) => current || result.ownerEmail || "");
+      }
+      setVoucherRedeemError(null);
+      toast.success("Voucher redeemed. Confirm contact preferences to continue.");
+    } catch (error: unknown) {
+      const msg =
+        error instanceof Error ? error.message : "Failed to redeem voucher.";
+      setVoucherRedeemError(msg);
+      toast.error(msg);
     }
-    toast.success("Voucher redeemed. Confirm contact preferences to continue.");
   }
 
   useEffect(() => {
@@ -717,11 +772,17 @@ export default function CreateCapsule() {
               <DialogTrigger asChild>
                 <Button
                   variant="sales"
-                  className="rounded-sm"
+                  className="rounded-sm gap-2"
                   data-ocid="create.open_modal_button"
                 >
-                  <Gem className="w-4 h-4 mr-2" />
-                  Order Keepsake
+                  <Gem className="w-4 h-4 shrink-0" />
+                  <span>Physical keepsake</span>
+                  <Badge
+                    variant="outline"
+                    className="border-amber/45 bg-amber/10 text-[10px] font-mono-display uppercase tracking-wider text-amber"
+                  >
+                    Soon
+                  </Badge>
                 </Button>
               </DialogTrigger>
               <DialogContent
@@ -733,13 +794,11 @@ export default function CreateCapsule() {
                     Physical Canister Keepsake
                   </DialogTitle>
                   <DialogDescription className="text-muted-foreground">
-                    Coming soon — a custom pendant engraved with your canister's
-                    QR code.
+                    A custom pendant engraved with your canister's QR code.
                   </DialogDescription>
                 </DialogHeader>
                 <p className="text-sm text-muted-foreground py-4">
-                  Physical keepsake ordering is coming soon. We'll notify you
-                  when it launches.
+                  We'll notify you when ordering opens.
                 </p>
                 <Button
                   variant="sales"
@@ -1011,7 +1070,19 @@ export default function CreateCapsule() {
                             : ""
                         }
                       >
-                        Credit card
+                        Card
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={paymentMethod === "voucher" ? "sales" : "outline"}
+                        onClick={() => setPaymentMethod("voucher")}
+                        className={
+                          paymentMethod !== "voucher"
+                            ? "border-amber/40 text-amber hover:bg-amber/10"
+                            : ""
+                        }
+                      >
+                        Voucher
                       </Button>
                       <Button
                         type="button"
@@ -1025,18 +1096,6 @@ export default function CreateCapsule() {
                         }
                       >
                         Crypto (Coming soon)
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={paymentMethod === "voucher" ? "sales" : "outline"}
-                        onClick={() => setPaymentMethod("voucher")}
-                        className={
-                          paymentMethod !== "voucher"
-                            ? "border-amber/40 text-amber hover:bg-amber/10"
-                            : ""
-                        }
-                      >
-                        Voucher
                       </Button>
                     </div>
                     {paymentMethod === "card" && (
@@ -1103,23 +1162,18 @@ export default function CreateCapsule() {
                           <Input
                             id="voucherCode"
                             value={voucherCode}
-                            onChange={(event) =>
-                              setVoucherCode(event.target.value.toUpperCase().trim())
-                            }
+                            onChange={(event) => {
+                              setVoucherRedeemError(null);
+                              setVoucherCode(event.target.value.toUpperCase().trim());
+                            }}
                             placeholder="voucher code"
                           />
                           <Button
                             type="button"
                             variant="sales"
-                            onClick={() =>
-                              handleRedeemVoucher().catch((error) => {
-                                toast.error(
-                                  error instanceof Error
-                                    ? error.message
-                                    : "Failed to redeem voucher.",
-                                );
-                              })
-                            }
+                            onClick={() => {
+                              void handleRedeemVoucher();
+                            }}
                             disabled={
                               redeemVoucherCode.isPending || isPaymentConfirmed || !voucherCode
                             }
@@ -1127,9 +1181,13 @@ export default function CreateCapsule() {
                             Redeem
                           </Button>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          One code unlocks one paid canister for the selected plan.
-                        </p>
+                        {voucherRedeemError ? (
+                          <p className="text-xs text-destructive">{voucherRedeemError}</p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            One code unlocks one paid canister for the selected plan.
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1587,21 +1645,43 @@ export default function CreateCapsule() {
               Continue <ArrowRight className="w-4 h-4 ml-2" />
             </Button>
           ) : (
-            <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-              <Button
-                onClick={handleSeal}
-                disabled={
-                  createCapsule.isPending ||
-                  (requiresPayment && !isPaymentConfirmed)
-                }
-                variant="utility"
-                className="px-8 glow-cyan-lg rounded-sm font-semibold"
-                data-ocid="create.submit_button"
+            <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-end">
+              {selectedPlan !== "free" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => submitCapsule(true)}
+                  disabled={
+                    createCapsule.isPending ||
+                    (requiresPayment && !isPaymentConfirmed)
+                  }
+                  className="rounded-sm border-primary/40"
+                  data-ocid="create.save_draft_button"
+                >
+                  Save draft
+                </Button>
+              )}
+              <motion.div
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                className="inline-flex"
               >
-                <Lock className="w-4 h-4 mr-2" />
-                Seal Canister
-              </Button>
-            </motion.div>
+                <Button
+                  type="button"
+                  onClick={() => submitCapsule(false)}
+                  disabled={
+                    createCapsule.isPending ||
+                    (requiresPayment && !isPaymentConfirmed)
+                  }
+                  variant="utility"
+                  className="px-8 glow-cyan-lg rounded-sm font-semibold"
+                  data-ocid="create.submit_button"
+                >
+                  <Lock className="w-4 h-4 mr-2" />
+                  Seal Canister
+                </Button>
+              </motion.div>
+            </div>
           )}
         </div>
       </div>

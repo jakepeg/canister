@@ -19,6 +19,9 @@ export default function NavBar() {
     enabled: Boolean(actor && identity),
   });
   const isAdmin = roleQuery.data === UserRole.admin;
+  const isLocalNetwork = import.meta.env.DFX_NETWORK === "local";
+  // Match AdminVouchersPage: on local replica, voucher tools are reachable (with bypass).
+  const showVouchersNav = isAdmin || isLocalNetwork;
 
   function handleSignOut() {
     clear();
@@ -54,7 +57,7 @@ export default function NavBar() {
               >
                 <Link to="/create">Create Canister</Link>
               </Button>
-              {isAdmin && (
+              {showVouchersNav && (
                 <Button
                   asChild
                   variant="ghost"

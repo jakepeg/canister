@@ -101,6 +101,11 @@ export interface CapsuleMetadata {
     creator: Principal;
     createdDate: Time;
     isUnlocked: boolean;
+    /** False while creator is still editing (save draft); decrypt/claim waits until true. */
+    contentLocked: boolean;
+    planTier: "free" | "signature" | "legacy";
+    /** Attachment blobs are AES-GCM ciphertext (same key as encrypted message). */
+    attachmentsEncrypted: boolean;
 }
 export interface _CaffeineStorageCreateCertificateResult {
     method: string;
@@ -127,7 +132,15 @@ export interface backendInterface {
     _caffeineStorageUpdateGatewayPrincipals(): Promise<void>;
     _initializeAccessControlWithSecret(userSecret: string): Promise<void>;
     assignCallerUserRole(user: Principal, role: UserRole): Promise<void>;
-    createCapsule(publicId: string, title: string, encryptedMessage: string, fileRefs: Array<ExternalBlob>, unlockDate: Time, messageCharCount: bigint, paymentIntentId: Array<string>): Promise<CapsuleId>;
+    createCapsule(publicId: string, title: string, encryptedMessage: string, fileRefs: Array<ExternalBlob>, unlockDate: Time, messageCharCount: bigint, paymentIntentId: Array<string>, saveAsDraft: boolean): Promise<CapsuleId>;
+    appendCapsuleFiles(
+        publicId: string,
+        fileRefs: Array<ExternalBlob>,
+        filesEncrypted: boolean,
+    ): Promise<void>;
+    lockCapsule(publicId: string): Promise<void>;
+    deleteCapsule(publicId: string): Promise<void>;
+    updateCapsuleTitle(publicId: string, newTitle: string): Promise<void>;
     createPaymentIntent(tier: Record<string, null>, paymentMethod: Record<string, null>): Promise<any>;
     getPaymentIntentStatus(intentId: string): Promise<any>;
     confirmPaymentIntent(intentId: string, providerPaymentId: string, targetStatus: Record<string, null>, webhookSecret: string): Promise<any>;
@@ -144,11 +157,22 @@ export interface backendInterface {
         data: Uint8Array;
     }>;
     getCapsuleMetadata(id: string): Promise<CapsuleMetadata>;
+    getCapsuleNotificationPreferences(id: string): Promise<any>;
     getMyCapsules(): Promise<Array<CapsuleMetadata>>;
     getTotalCapsuleCount(): Promise<bigint>;
     getUserProfile(user: Principal): Promise<UserProfile | null>;
     isCallerAdmin(): Promise<boolean>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
+    saveCapsuleNotificationPreferences(
+        publicId: string,
+        ownerEmail: string,
+        reminderTarget: Record<string, null>,
+        recipientEmail: [] | [string],
+        reminderOptIn: boolean,
+        marketingOptIn: boolean,
+        notifyRecipientOnCreation: boolean,
+        hasRecipientPermission: boolean,
+    ): Promise<void>;
     uploadCapsuleFile(name: string, mimeType: string, data: Uint8Array): Promise<string>;
 }
 import type { ExternalBlob as _ExternalBlob, UserProfile as _UserProfile, UserRole as _UserRole, _CaffeineStorageRefillInformation as __CaffeineStorageRefillInformation, _CaffeineStorageRefillResult as __CaffeineStorageRefillResult } from "./declarations/backend.did.d.ts";
@@ -266,17 +290,57 @@ export class Backend implements backendInterface {
             return result;
         }
     }
-    async createCapsule(arg0: string, arg1: string, arg2: string, arg3: Array<ExternalBlob>, arg4: Time, arg5: bigint, arg6: Array<string>): Promise<CapsuleId> {
+    async createCapsule(arg0: string, arg1: string, arg2: string, arg3: Array<ExternalBlob>, arg4: Time, arg5: bigint, arg6: Array<string>, saveAsDraft: boolean): Promise<CapsuleId> {
         if (this.processError) {
             try {
-                const result = await (this.actor as any).createCapsule(arg0, arg1, arg2, await to_candid_vec_n10(this._uploadFile, this._downloadFile, arg3), arg4, arg5, arg6);
+                const result = await (this.actor as any).createCapsule(arg0, arg1, arg2, await to_candid_vec_n10(this._uploadFile, this._downloadFile, arg3), arg4, arg5, arg6, saveAsDraft);
                 return result;
             } catch (e) {
                 this.processError(e);
                 throw new Error("unreachable");
             }
         } else {
-            const result = await (this.actor as any).createCapsule(arg0, arg1, arg2, await to_candid_vec_n10(this._uploadFile, this._downloadFile, arg3), arg4, arg5, arg6);
+            const result = await (this.actor as any).createCapsule(arg0, arg1, arg2, await to_candid_vec_n10(this._uploadFile, this._downloadFile, arg3), arg4, arg5, arg6, saveAsDraft);
+            return result;
+        }
+    }
+    async appendCapsuleFiles(
+        publicId: string,
+        fileRefs: Array<ExternalBlob>,
+        filesEncrypted: boolean,
+    ): Promise<void> {
+        if (this.processError) {
+            try {
+                const result = await (this.actor as any).appendCapsuleFiles(
+                    publicId,
+                    await to_candid_vec_n10(this._uploadFile, this._downloadFile, fileRefs),
+                    filesEncrypted,
+                );
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await (this.actor as any).appendCapsuleFiles(
+                publicId,
+                await to_candid_vec_n10(this._uploadFile, this._downloadFile, fileRefs),
+                filesEncrypted,
+            );
+            return result;
+        }
+    }
+    async lockCapsule(publicId: string): Promise<void> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.lockCapsule(publicId);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.lockCapsule(publicId);
             return result;
         }
     }
@@ -441,6 +505,36 @@ export class Backend implements backendInterface {
     }
     async uploadCapsuleFile(arg0: string, arg1: string, arg2: Uint8Array): Promise<string> {
         return await (this.actor as any).uploadCapsuleFile(arg0, arg1, arg2);
+    }
+    async deleteCapsule(arg0: string): Promise<void> {
+        return await (this.actor as any).deleteCapsule(arg0);
+    }
+    async updateCapsuleTitle(arg0: string, arg1: string): Promise<void> {
+        return await (this.actor as any).updateCapsuleTitle(arg0, arg1);
+    }
+    async getCapsuleNotificationPreferences(arg0: string): Promise<any> {
+        return await (this.actor as any).getCapsuleNotificationPreferences(arg0);
+    }
+    async saveCapsuleNotificationPreferences(
+        arg0: string,
+        arg1: string,
+        arg2: Record<string, null>,
+        arg3: [] | [string],
+        arg4: boolean,
+        arg5: boolean,
+        arg6: boolean,
+        arg7: boolean,
+    ): Promise<void> {
+        return await (this.actor as any).saveCapsuleNotificationPreferences(
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+        );
     }
 }
 async function from_candid_ExternalBlob_n17(_uploadFile: (file: ExternalBlob) => Promise<Uint8Array>, _downloadFile: (file: Uint8Array) => Promise<ExternalBlob>, value: _ExternalBlob): Promise<ExternalBlob> {

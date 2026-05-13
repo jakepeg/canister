@@ -2,6 +2,7 @@ import { Actor, HttpAgent } from "@icp-sdk/core/agent";
 import type { Identity } from "@icp-sdk/core/identity";
 import { IDL } from "@icp-sdk/core/candid";
 import { loadConfig } from "../config";
+import { parseCanisterRejectMessage, voucherRedeemUserMessage } from "../utils/canisterErrors";
 
 export type VoucherTier = "signature" | "legacy";
 
@@ -173,13 +174,17 @@ export async function redeemVoucherCode(params: {
   code: string;
   tier: VoucherTier;
 }): Promise<{ id: string; status: string; ownerEmail?: string }> {
-  const actor = await createVoucherActor(params.identity);
-  const intent = await actor.redeemVoucherCode(params.code, toVariant(params.tier));
-  return {
-    id: intent.id,
-    status: fromVariant<string>(intent.status),
-    ownerEmail: fromOptional<string>(intent.ownerEmail),
-  };
+  try {
+    const actor = await createVoucherActor(params.identity);
+    const intent = await actor.redeemVoucherCode(params.code, toVariant(params.tier));
+    return {
+      id: intent.id,
+      status: fromVariant<string>(intent.status),
+      ownerEmail: fromOptional<string>(intent.ownerEmail),
+    };
+  } catch (e: unknown) {
+    throw new Error(voucherRedeemUserMessage(parseCanisterRejectMessage(e)));
+  }
 }
 
 export async function getLocalDevAdminBypassEnabled(identity?: Identity): Promise<boolean> {

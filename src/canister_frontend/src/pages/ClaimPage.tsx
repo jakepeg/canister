@@ -9,9 +9,17 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useParams } from "@tanstack/react-router";
-import { AlertTriangle, Clock, Download, Lock, Unlock } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarPlus,
+  Clock,
+  Download,
+  Lock,
+  Unlock,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import type { ExternalBlob } from "../backend";
 import { useActor } from "../hooks/useActor";
 import {
@@ -19,6 +27,11 @@ import {
   useGetCapsuleMetadata,
 } from "../hooks/useQueries";
 import { trackEvent } from "../lib/analytics";
+import { decryptBytesWithAesGcm } from "../lib/capsuleCrypto";
+import {
+  buildUnlockCalendarLinks,
+  triggerIcsDownload,
+} from "../utils/unlockCalendar";
 
 function formatDate(timeNs: bigint): string {
   return new Date(Number(timeNs / 1_000_000n)).toLocaleDateString("en-US", {
@@ -88,6 +101,40 @@ function CountdownUnit({ value, label }: { value: number; label: string }) {
   );
 }
 
+function ClaimOpeningOverlay({ subtitle }: { subtitle: string }) {
+  return (
+    <main
+      className="min-h-screen flex items-center justify-center pt-16 px-4"
+      data-ocid="claim.opening_overlay"
+    >
+      <div className="text-center max-w-md">
+        <div className="relative w-36 h-36 mx-auto mb-10">
+          <div className="absolute inset-0 rounded-full animate-seal-glow bg-primary/5 border border-primary/20" />
+          <div className="absolute inset-3 rounded-full bg-primary/10 border border-primary/30 animate-seal-pulse" />
+          <div className="absolute inset-6 rounded-full bg-primary/20 border-2 border-primary/50" />
+          <Unlock className="absolute inset-0 m-auto w-10 h-10 text-primary animate-bounce" />
+          <div
+            className="absolute inset-0 rounded-full border border-primary/20"
+            style={{
+              animation: "spin 3s linear infinite",
+              borderTopColor: "oklch(0.72 0.17 207)",
+            }}
+          />
+        </div>
+        <h2 className="font-display text-3xl font-bold text-foreground mb-3">
+          Opening your canister
+        </h2>
+        <p className="text-primary font-mono-display text-sm mb-6">
+          {subtitle}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Secured by the Internet Computer blockchain.
+        </p>
+      </div>
+    </main>
+  );
+}
+
 function FileRefItem({
   fileId,
   index,
@@ -137,12 +184,80 @@ export default function ClaimPage() {
     data: metadata,
     isLoading: metaLoading,
     isError: metaError,
+    refetch: refetchMetadata,
   } = useGetCapsuleMetadata(capsuleId);
 
+  const [pollGiveUp, setPollGiveUp] = useState(false);
+
+  const calendarLinks = useMemo(() => {
+    if (!metadata || metadata.isUnlocked) return null;
+    const unlockMs = Number(metadata.unlockDate / 1_000_000n);
+    if (unlockMs <= Date.now()) return null;
+    return buildUnlockCalendarLinks({
+      unlockDateNs: metadata.unlockDate,
+      title: metadata.title,
+      capsuleId: metadata.id,
+      claimUrl: window.location.href,
+    });
+  }, [metadata]);
+
   const isUnlocked = metadata?.isUnlocked ?? false;
+  const contentLocked = metadata?.contentLocked ?? true;
+
+  const unlockMs = useMemo(
+    () => (metadata ? Number(metadata.unlockDate / 1_000_000n) : 0),
+    [metadata],
+  );
+  const localPastUnlock = Boolean(
+    metadata?.contentLocked && Date.now() >= unlockMs,
+  );
+  const needsChainUnlock = Boolean(
+    metadata?.contentLocked && !isUnlocked && localPastUnlock,
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset poll retry when switching claim targets or unlock schedule
+  useEffect(() => {
+    setPollGiveUp(false);
+  }, [capsuleId, metadata?.unlockDate]);
+
+  useEffect(() => {
+    if (!needsChainUnlock || pollGiveUp) {
+      return;
+    }
+    let stopped = false;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 45;
+
+    const runAttempt = async () => {
+      if (stopped) return;
+      if (attempts >= MAX_ATTEMPTS) return;
+      attempts += 1;
+      const res = await refetchMetadata();
+      if (stopped) return;
+      if (res.data?.isUnlocked) {
+        trackEvent("claim_live_unlock_confirmed", { capsule_id: capsuleId });
+        return;
+      }
+      if (attempts >= MAX_ATTEMPTS) {
+        setPollGiveUp(true);
+        trackEvent("claim_live_unlock_poll_timeout", { capsule_id: capsuleId });
+      }
+    };
+
+    void runAttempt();
+    const id = window.setInterval(() => {
+      void runAttempt();
+    }, 1500);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [needsChainUnlock, pollGiveUp, refetchMetadata, capsuleId]);
+
   const { data: content, isLoading: contentLoading } = useGetCapsuleContent(
     capsuleId,
-    isUnlocked,
+    isUnlocked && contentLocked,
   );
 
   const [countdown, setCountdown] = useState<CountdownTime | null>(null);
@@ -151,6 +266,24 @@ export default function ClaimPage() {
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [fileIds, setFileIds] = useState<string[]>([]);
   const hasUnlockedWithKey = Boolean(decryptedMessage);
+
+  const showLiveOpenOverlay =
+    (needsChainUnlock && !pollGiveUp) ||
+    (isUnlocked && !hasUnlockedWithKey && (contentLoading || isDecrypting));
+
+  const openingSubtitle = useMemo(() => {
+    if (isDecrypting) {
+      return "Decrypting your message…";
+    }
+    if (isUnlocked && contentLoading) {
+      return "Loading sealed content…";
+    }
+    if (needsChainUnlock && !pollGiveUp) {
+      return "Confirming unlock on-chain…";
+    }
+    return "Preparing your content…";
+  }, [isDecrypting, isUnlocked, contentLoading, needsChainUnlock, pollGiveUp]);
+
   const displayCountdown = isUnlocked
     ? { days: 0, hours: 0, minutes: 0, seconds: 0 }
     : countdown;
@@ -211,14 +344,24 @@ export default function ClaimPage() {
 
   const downloadFile = useCallback(
     async (fileId: string) => {
-      if (!hasUnlockedWithKey) {
+      if (!hasUnlockedWithKey || !metadata) {
         return;
       }
       if (!actor) {
         throw new Error("Not connected");
       }
       const file = await actor.getCapsuleFile(capsuleId, fileId);
-      const data = file.data as Uint8Array;
+      let data = new Uint8Array(file.data as Uint8Array);
+      if (metadata.attachmentsEncrypted) {
+        try {
+          data = new Uint8Array(await decryptBytesWithAesGcm(data, decryptKey));
+        } catch {
+          toast.error(
+            "Could not decrypt this file — the key may not match this canister.",
+          );
+          return;
+        }
+      }
       const mimeType = file.mimeType || "application/octet-stream";
       const name = file.name || `file-${fileId}`;
       const blob = new Blob([data], { type: mimeType });
@@ -235,7 +378,7 @@ export default function ClaimPage() {
         file_id: fileId,
       });
     },
-    [actor, capsuleId, hasUnlockedWithKey],
+    [actor, capsuleId, decryptKey, hasUnlockedWithKey, metadata],
   );
 
   useEffect(() => {
@@ -343,10 +486,52 @@ export default function ClaimPage() {
             Canister Not Found
           </h2>
           <p className="text-muted-foreground">
-            This canister doesn't exist or the link is invalid.
+            This canister does not exist, the link is invalid, or it was removed
+            by the creator.
           </p>
         </div>
       </main>
+    );
+  }
+
+  // ── Draft: creator has not finalized on-chain yet ──
+  if (!metadata.contentLocked) {
+    return (
+      <main className="min-h-screen flex flex-col items-center justify-center pt-16 px-4 py-12">
+        <div
+          className="max-w-lg w-full text-center"
+          data-ocid="claim.draft_state"
+        >
+          <div className="relative w-28 h-28 mx-auto mb-8">
+            <div className="absolute inset-0 rounded-full bg-amber/10 border border-amber/30" />
+            <Lock className="absolute inset-0 m-auto w-11 h-11 text-amber" />
+          </div>
+          <h1 className="font-display text-3xl md:text-4xl font-bold text-foreground mb-4">
+            Not finalized yet
+          </h1>
+          <p className="text-muted-foreground mb-6">
+            The creator is still editing this canister. Check back after they
+            finalize it from their dashboard. The claim link will work once
+            content is sealed and the unlock time has passed.
+          </p>
+          <p className="text-sm text-muted-foreground border-t border-border/40 pt-6">
+            <span className="font-medium text-foreground">
+              {metadata.title}
+            </span>
+            {" · "}
+            Unlocks {formatDate(metadata.unlockDate)}
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (showLiveOpenOverlay) {
+    return (
+      <>
+        <ClaimOpeningOverlay subtitle={openingSubtitle} />
+        {unlockDialog}
+      </>
     );
   }
 
@@ -355,6 +540,25 @@ export default function ClaimPage() {
     return (
       <main className="min-h-screen flex flex-col items-center justify-center pt-16 px-4 py-12">
         <div className="max-w-lg w-full text-center" data-ocid="claim.panel">
+          {pollGiveUp && needsChainUnlock && (
+            <div className="mb-8 rounded-sm border border-amber/40 bg-amber/10 px-4 py-3 text-left text-sm text-foreground">
+              <p className="mb-3 text-muted-foreground">
+                Your clock shows unlock time, but the chain has not reported
+                unlock yet. This usually resolves within seconds.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                data-ocid="claim.secondary_button"
+                onClick={() => {
+                  setPollGiveUp(false);
+                  void refetchMetadata();
+                }}
+              >
+                Check unlock status
+              </Button>
+            </div>
+          )}
           {/* Padlock */}
           <motion.div
             initial={{ opacity: 0, scale: 0.8 }}
@@ -391,11 +595,11 @@ export default function ClaimPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2, duration: 0.6 }}
           >
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-amber/30 bg-amber/10 text-amber text-xs font-mono-display font-medium mb-6">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-amber/30 bg-amber/10 text-amber text-xs font-mono-display font-medium mb-6">
               <span className="w-1.5 h-1.5 rounded-full bg-amber animate-pulse" />
-                {isUnlocked
-                  ? "TIME REACHED · KEY REQUIRED"
-                  : "SEALED · BLOCKCHAIN ENFORCED"}
+              {isUnlocked
+                ? "TIME REACHED · KEY REQUIRED"
+                : "SEALED · BLOCKCHAIN ENFORCED"}
             </div>
 
             <h1 className="font-display text-4xl md:text-5xl font-bold text-foreground mb-4">
@@ -416,12 +620,55 @@ export default function ClaimPage() {
                 Unlock time reached. Enter the decryption key to view content.
               </p>
             ) : (
-              <p className="text-sm text-muted-foreground mb-10">
-                Sealed and waiting. Unlocks on{" "}
-                <span className="text-amber font-medium">
-                  {formatDate(metadata.unlockDate)}
-                </span>
-              </p>
+              <>
+                <p
+                  className={`text-sm text-muted-foreground ${calendarLinks ? "mb-4" : "mb-10"}`}
+                >
+                  Sealed and waiting. Unlocks on{" "}
+                  <span className="text-amber font-medium">
+                    {formatDate(metadata.unlockDate)}
+                  </span>
+                </p>
+                {calendarLinks && (
+                  <div className="flex flex-wrap items-center justify-center gap-2 mb-10">
+                    <Button variant="outline" size="sm" asChild>
+                      <a
+                        href={calendarLinks.googleCalendarUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-ocid="claim.calendar_google"
+                        onClick={() =>
+                          trackEvent("calendar_add_clicked", {
+                            capsule_id: capsuleId,
+                            provider: "google",
+                          })
+                        }
+                      >
+                        <CalendarPlus className="w-3.5 h-3.5" />
+                        Google Calendar
+                      </a>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-ocid="claim.calendar_ics"
+                      onClick={() => {
+                        trackEvent("calendar_add_clicked", {
+                          capsule_id: capsuleId,
+                          provider: "ics",
+                        });
+                        triggerIcsDownload(
+                          calendarLinks.icsContent,
+                          calendarLinks.suggestedFilename,
+                        );
+                      }}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Download .ics
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Countdown */}

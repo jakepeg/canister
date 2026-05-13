@@ -23,7 +23,9 @@ export interface CapsuleMetadata {
     creator: Principal;
     createdDate: Time;
     isUnlocked: boolean;
+    contentLocked: boolean;
     planTier: "free" | "signature" | "legacy";
+    attachmentsEncrypted: boolean;
 }
 export interface UserProfile {
     name: string;
@@ -35,7 +37,15 @@ export enum UserRole {
 }
 export interface backendInterface {
     assignCallerUserRole(user: Principal, role: UserRole): Promise<void>;
-    createCapsule(publicId: string, title: string, encryptedMessage: string, fileRefs: Array<ExternalBlob>, unlockDate: Time, messageCharCount: bigint, paymentIntentId: Array<string>): Promise<CapsuleId>;
+    createCapsule(publicId: string, title: string, encryptedMessage: string, fileRefs: Array<ExternalBlob>, unlockDate: Time, messageCharCount: bigint, paymentIntentId: Array<string>, saveAsDraft: boolean): Promise<CapsuleId>;
+    appendCapsuleFiles(
+        publicId: string,
+        fileRefs: Array<ExternalBlob>,
+        filesEncrypted: boolean,
+    ): Promise<void>;
+    lockCapsule(publicId: string): Promise<void>;
+    deleteCapsule(publicId: string): Promise<void>;
+    updateCapsuleTitle(publicId: string, newTitle: string): Promise<void>;
     createPaymentIntent(tier: { free?: null; signature?: null; legacy?: null }, paymentMethod: { card?: null; crypto?: null; voucher?: null }): Promise<any>;
     getPaymentIntentStatus(intentId: string): Promise<any>;
     confirmPaymentIntent(intentId: string, providerPaymentId: string, targetStatus: { pending?: null; confirmed?: null; failed?: null; expired?: null; refunded?: null }, webhookSecret: string): Promise<any>;
@@ -52,10 +62,21 @@ export interface backendInterface {
         data: Uint8Array<ArrayBuffer>;
     }>;
     getCapsuleMetadata(id: string): Promise<CapsuleMetadata>;
+    getCapsuleNotificationPreferences(id: string): Promise<any>;
     getMyCapsules(): Promise<Array<CapsuleMetadata>>;
     getTotalCapsuleCount(): Promise<bigint>;
     getUserProfile(user: Principal): Promise<UserProfile | null>;
     isCallerAdmin(): Promise<boolean>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
+    saveCapsuleNotificationPreferences(
+        publicId: string,
+        ownerEmail: string,
+        reminderTarget: Record<string, null>,
+        recipientEmail: [] | [string],
+        reminderOptIn: boolean,
+        marketingOptIn: boolean,
+        notifyRecipientOnCreation: boolean,
+        hasRecipientPermission: boolean,
+    ): Promise<void>;
     uploadCapsuleFile(name: string, mimeType: string, data: Uint8Array<ArrayBuffer>): Promise<string>;
 }

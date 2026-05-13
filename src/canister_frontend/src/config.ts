@@ -5,6 +5,7 @@ import {
   ExternalBlob,
 } from "./backend";
 import { HttpAgent } from "@icp-sdk/core/agent";
+import { parseCanisterRejectMessage } from "./utils/canisterErrors";
 
 const DEFAULT_PROJECT_ID = "0000000-0000-0000-0000-00000000000";
 
@@ -87,15 +88,9 @@ export async function loadConfig(): Promise<Config> {
   }
 }
 
-function extractAgentErrorMessage(error: string): string {
-  const errorString = String(error);
-  const match = errorString.match(/with message:\s*'([^']+)'/s);
-  return match ? match[1] : errorString;
-}
-
 function processError(e: unknown): never {
   if (e && typeof e === "object" && "message" in e) {
-    throw new Error(extractAgentErrorMessage(`${e.message}`));
+    throw new Error(parseCanisterRejectMessage(e));
   }
   throw e;
 }

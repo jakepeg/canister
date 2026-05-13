@@ -7,30 +7,19 @@ const ACTOR_QUERY_KEY = "actor";
 export function useActor() {
   const { identity } = useInternetIdentity();
   const queryClient = useQueryClient();
-  const isLocal = import.meta.env.DFX_NETWORK === "local";
   const actorQuery = useQuery({
     queryKey: [ACTOR_QUERY_KEY, identity?.getPrincipal().toString()],
     queryFn: async () => {
-      if (isLocal) {
-        // In local dev, II delegations can be flaky depending on browser/session
-        // state. Use an anonymous backend actor to keep app flows functional.
-        return await createActorWithConfig();
+      // Use the signed-in II identity whenever available so query/update calls use
+      // the caller's principal (roles, ownership). Without this, local dev always
+      // used an anonymous actor and `getCallerUserRole()` never returned `#admin`.
+      if (identity) {
+        return await createActorWithConfig({
+          agentOptions: { identity },
+        });
       }
 
-      const isAuthenticated = !!identity;
-
-      if (!isAuthenticated) {
-        // Return anonymous actor if not authenticated
-        return await createActorWithConfig();
-      }
-
-      const actorOptions = {
-        agentOptions: {
-          identity,
-        },
-      };
-
-      return await createActorWithConfig(actorOptions);
+      return await createActorWithConfig();
     },
     // Only refetch when identity changes
     staleTime: Number.POSITIVE_INFINITY,

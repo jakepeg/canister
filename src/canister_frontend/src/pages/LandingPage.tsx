@@ -33,7 +33,7 @@ const STEPS = [
     step: "03",
     title: "3. Share",
     description:
-      "Share a digital access key, or turn it into a physical keepsake.",
+      "Share a digital access key, or turn it into a physical keepsake (coming soon).",
     color: "cyan",
   },
 ];
@@ -66,7 +66,6 @@ const PRICING_TIERS = [
       "No file uploads and up to 1-year unlock horizon",
       "Encrypted message and verifiable unlock controls",
     ],
-    highlighted: false,
   },
   {
     name: "Signature",
@@ -78,7 +77,6 @@ const PRICING_TIERS = [
       "Unlock date up to 5 years ahead",
       "30-day post-unlock download window",
     ],
-    highlighted: true,
   },
   {
     name: "Legacy",
@@ -91,7 +89,6 @@ const PRICING_TIERS = [
       "Lifetime retention goal, subject to network availability and protocol continuity.",
       "Designed for premium archive use cases",
     ],
-    highlighted: false,
   },
 ];
 
@@ -136,9 +133,6 @@ export default function LandingPage() {
             </h1>
             <p className="mx-auto mt-8 max-w-3xl text-xl text-[#f2efe8]/92 sm:text-3xl">
               Create and seal Canisters that unlock in the future.
-            </p>
-            <p className="mx-auto mt-3 font-mono-display text-xs uppercase tracking-[0.28em] text-[#d8b274]/90 sm:text-sm">
-              Share digitally or as a physical keepsake
             </p>
 
             <div className="mt-12 flex flex-col items-center justify-center gap-4 sm:flex-row">
@@ -291,28 +285,17 @@ export default function LandingPage() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ duration: 0.4, delay: i * 0.08 }}
-                className={`h-full rounded-sm border bg-[#101010]/85 p-6 transition-all ${
-                  tier.highlighted
-                    ? "border-[#c9a763]/55 shadow-[0_0_24px_rgba(201,167,99,0.15)]"
-                    : "border-[#c9a763]/20 hover:border-[#c9a763]/40"
-                }`}
+                className="flex h-full flex-col gap-6 rounded-sm border border-[#c9a763]/55 bg-[#101010]/85 p-6 shadow-[0_0_24px_rgba(201,167,99,0.15)] transition-all"
               >
-                <div className="mb-6">
-                  <div className="mb-2 flex items-center justify-between">
-                    <h3 className="font-semibold uppercase tracking-[0.12em] text-[#f2efe8]">
-                      {tier.name}
-                    </h3>
-                    {tier.highlighted && (
-                      <span className="rounded-sm border border-[#c9a763]/45 bg-[#c9a763]/12 px-2 py-1 font-mono-display text-[10px] uppercase tracking-[0.15em] text-[#d8b274]">
-                        Recommended
-                      </span>
-                    )}
-                  </div>
+                <div>
+                  <h3 className="mb-2 font-semibold uppercase tracking-[0.12em] text-[#f2efe8]">
+                    {tier.name}
+                  </h3>
                   <p className="font-display text-4xl text-[#f2efe8]">{tier.price}</p>
                   <p className="mt-2 text-sm text-[#f2efe8]/65">{tier.subtitle}</p>
                 </div>
 
-                <ul className="space-y-2.5">
+                <ul className="min-h-0 flex-1 space-y-2.5">
                   {tier.features.map((feature) => (
                     <li
                       key={feature}
@@ -337,7 +320,7 @@ export default function LandingPage() {
                     )
                   }
                   variant="sales"
-                  className="mt-6 w-full rounded-sm"
+                  className="w-full shrink-0 rounded-sm"
                 >
                   Choose {tier.name}
                 </Button>

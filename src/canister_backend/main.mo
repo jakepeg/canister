@@ -40,6 +40,8 @@ persistent actor {
     unlockDate : Time.Time;
     createdDate : Time.Time;
     planTier : PlanTier;
+    /// When true, attachment blobs are AES-GCM ciphertext (same symmetric key as `encryptedMessage`); legacy uses false.
+    attachmentsEncrypted : Bool;
   };
 
   public type CapsuleMetadata = {
@@ -49,7 +51,10 @@ persistent actor {
     unlockDate : Time.Time;
     createdDate : Time.Time;
     isUnlocked : Bool;
+    /// False while the creator is still editing (Save draft); recipients should wait until true.
+    contentLocked : Bool;
     planTier : PlanTier;
+    attachmentsEncrypted : Bool;
   };
 
   public type PlanTier = {
@@ -219,6 +224,8 @@ persistent actor {
   // `Capsule.fileRefs` are persisted here; the blobs themselves live on the IC
   // storage layer and must remain "live" there for those bytes to resolve.
   let capsules = Map.empty<CapsuleId, Capsule>();
+  /// Capsule ids still in draft (save-as-draft); absent entries are finalized content.
+  let draftCapsules = Map.empty<CapsuleId, Bool>();
   let capsuleIdsByPublicId = Map.empty<Text, CapsuleId>();
   let userProfiles = Map.empty<Principal, UserProfile>();
   let paymentIntents = Map.empty<Text, PaymentIntent>();
@@ -419,6 +426,69 @@ persistent actor {
     found;
   };
 
+  private func appendFileRefs(
+    prefix : [Storage.ExternalBlob],
+    suffix : [Storage.ExternalBlob],
+  ) : [Storage.ExternalBlob] {
+    let n = prefix.size();
+    let m = suffix.size();
+    Array.tabulate<Storage.ExternalBlob>(
+      n + m,
+      func(i : Nat) {
+        if (i < n) {
+          prefix[i];
+        } else {
+          suffix[i - n];
+        };
+      },
+    );
+  };
+
+  private func validateCapsuleAttachments(
+    caller : Principal,
+    planTier : PlanTier,
+    fileRefs : [Storage.ExternalBlob],
+  ) {
+    let limits = planLimits(planTier);
+    if (fileRefs.size() > limits.maxFilesPerCapsule) {
+      if (planTier == #free) {
+        Runtime.trap("Free plan does not include file uploads.");
+      };
+      Runtime.trap("Too many files for one capsule.");
+    };
+    if (planTier != #free) {
+      var totalAttachmentBytes : Nat = 0;
+      for (fileRef in fileRefs.vals()) {
+        let fileId = decodeFileRef(fileRef);
+        let stored = switch (storedFiles.get(fileId)) {
+          case (null) { Runtime.trap("Referenced file not found"); };
+          case (?file) { file };
+        };
+
+        if (stored.uploadedBy != caller) {
+          Runtime.trap("File ownership mismatch");
+        };
+        if (stored.sizeBytes > limits.maxFileBytes) {
+          Runtime.trap("One or more files exceeds the per-file size limit for this plan.");
+        };
+
+        totalAttachmentBytes += stored.sizeBytes;
+      };
+
+      if (totalAttachmentBytes > limits.maxTotalAttachmentBytes) {
+        Runtime.trap("Total attachment size exceeds capsule limit.");
+      };
+    };
+  };
+
+  /// True after finalize (or legacy capsules); false while save-as-draft editing.
+  private func capsuleContentIsLocked(capsuleId : CapsuleId) : Bool {
+    switch (draftCapsules.get(capsuleId)) {
+      case (?_) { false };
+      case (null) { true };
+    };
+  };
+
   private func providerCheckoutBase(provider : PaymentProvider) : Text {
     switch (provider) {
       case (#stripe) { "https://checkout.timecanister.app/stripe" };
@@ -480,6 +550,107 @@ persistent actor {
     };
   };
 
+  /// Validates owner/recipient emails and reminder-target rules; returns normalized emails.
+  private func validateAndNormalizeNotificationEmails(
+    ownerEmail : Text,
+    reminderTarget : ReminderTarget,
+    recipientEmail : ?Text,
+    hasRecipientPermission : Bool,
+  ) : (Text, ?Text) {
+    validateEmailOrTrap(ownerEmail);
+    let normalizedOwnerEmail = ownerEmail.toLower();
+
+    let normalizedRecipientEmail : ?Text = switch (recipientEmail) {
+      case (null) { null };
+      case (?rawRecipient) {
+        let cleaned = rawRecipient.toLower();
+        validateEmailOrTrap(cleaned);
+        ?cleaned;
+      };
+    };
+
+    switch (reminderTarget) {
+      case (#owner) {
+        if (recipientEmail != null) {
+          Runtime.trap("Recipient email must be empty when reminders target owner");
+        };
+      };
+      case (#other) {
+        if (normalizedRecipientEmail == null) {
+          Runtime.trap("Recipient email is required when reminders target someone else");
+        };
+        if (not hasRecipientPermission) {
+          Runtime.trap("Recipient permission confirmation is required");
+        };
+      };
+    };
+    (normalizedOwnerEmail, normalizedRecipientEmail);
+  };
+
+  private func mergeNotificationPreferenceRecord(
+    existing : ?NotificationPreferences,
+    normalizedOwnerEmail : Text,
+    normalizedRecipientEmail : ?Text,
+    reminderTarget : ReminderTarget,
+    reminderOptIn : Bool,
+    marketingOptIn : Bool,
+    notifyRecipientOnCreation : Bool,
+    hasRecipientPermission : Bool,
+  ) : NotificationPreferences {
+    let now = Time.now();
+    let previousReminderOptIn = switch (existing) {
+      case (null) { false };
+      case (?prefs) { prefs.reminderOptIn };
+    };
+    let previousMarketingOptIn = switch (existing) {
+      case (null) { false };
+      case (?prefs) { prefs.marketingOptIn };
+    };
+
+    let reminderConsentAt = switch (existing) {
+      case (?prefs) {
+        if (reminderOptIn and not previousReminderOptIn) ?now else prefs.reminderConsentAt;
+      };
+      case (null) {
+        if (reminderOptIn) ?now else null;
+      };
+    };
+    let marketingConsentAt = switch (existing) {
+      case (?prefs) {
+        if (marketingOptIn and not previousMarketingOptIn) ?now else prefs.marketingConsentAt;
+      };
+      case (null) {
+        if (marketingOptIn) ?now else null;
+      };
+    };
+    let previousCreationNoticeSentAt = switch (existing) {
+      case (null) { null };
+      case (?prefs) { prefs.creationNoticeSentAt };
+    };
+
+    {
+      ownerEmail = normalizedOwnerEmail;
+      recipientEmail = normalizedRecipientEmail;
+      reminderTarget;
+      reminderOptIn;
+      marketingOptIn;
+      notifyRecipientOnCreation;
+      hasRecipientPermission;
+      reminderConsentAt;
+      marketingConsentAt;
+      creationNoticeSentAt = previousCreationNoticeSentAt;
+      unlockReminderSentAt = switch (existing) {
+        case (?prefs) { prefs.unlockReminderSentAt };
+        case (null) { null };
+      };
+      expiryReminderSentAt = switch (existing) {
+        case (?prefs) { prefs.expiryReminderSentAt };
+        case (null) { null };
+      };
+      updatedAt = now;
+    };
+  };
+
   private func isLocalDevAdminBypassEnabled(caller : Principal) : Bool {
     // Guard bypass behind an explicit runtime flag and restrict it to the
     // local-style anonymous caller path used by the frontend in dev mode.
@@ -533,90 +704,69 @@ persistent actor {
       Runtime.trap("Payment intent does not belong to caller");
     };
 
-    validateEmailOrTrap(ownerEmail);
-    let normalizedOwnerEmail = ownerEmail.toLower();
-
-    let normalizedRecipientEmail : ?Text = switch (recipientEmail) {
-      case (null) { null };
-      case (?rawRecipient) {
-        let cleaned = rawRecipient.toLower();
-        validateEmailOrTrap(cleaned);
-        ?cleaned;
-      };
-    };
-
-    switch (reminderTarget) {
-      case (#owner) {
-        if (recipientEmail != null) {
-          Runtime.trap("Recipient email must be empty when reminders target owner");
-        };
-      };
-      case (#other) {
-        if (normalizedRecipientEmail == null) {
-          Runtime.trap("Recipient email is required when reminders target someone else");
-        };
-        if (not hasRecipientPermission) {
-          Runtime.trap("Recipient permission confirmation is required");
-        };
-      };
-    };
-
-    let existing = paymentNotificationPrefs.get(intentId);
-    let now = Time.now();
-    let previousReminderOptIn = switch (existing) {
-      case (null) { false };
-      case (?prefs) { prefs.reminderOptIn };
-    };
-    let previousMarketingOptIn = switch (existing) {
-      case (null) { false };
-      case (?prefs) { prefs.marketingOptIn };
-    };
-
-    let reminderConsentAt = switch (existing) {
-      case (?prefs) {
-        if (reminderOptIn and not previousReminderOptIn) ?now else prefs.reminderConsentAt;
-      };
-      case (null) {
-        if (reminderOptIn) ?now else null;
-      };
-    };
-    let marketingConsentAt = switch (existing) {
-      case (?prefs) {
-        if (marketingOptIn and not previousMarketingOptIn) ?now else prefs.marketingConsentAt;
-      };
-      case (null) {
-        if (marketingOptIn) ?now else null;
-      };
-    };
-    let previousCreationNoticeSentAt = switch (existing) {
-      case (null) { null };
-      case (?prefs) { prefs.creationNoticeSentAt };
-    };
-
-    paymentNotificationPrefs.add(
-      intentId,
-      {
-        ownerEmail = normalizedOwnerEmail;
-        recipientEmail = normalizedRecipientEmail;
-        reminderTarget;
-        reminderOptIn;
-        marketingOptIn;
-        notifyRecipientOnCreation;
-        hasRecipientPermission;
-        reminderConsentAt;
-        marketingConsentAt;
-        creationNoticeSentAt = previousCreationNoticeSentAt;
-        unlockReminderSentAt = switch (existing) {
-          case (?prefs) { prefs.unlockReminderSentAt };
-          case (null) { null };
-        };
-        expiryReminderSentAt = switch (existing) {
-          case (?prefs) { prefs.expiryReminderSentAt };
-          case (null) { null };
-        };
-        updatedAt = now;
-      },
+    let (normalizedOwnerEmail, normalizedRecipientEmail) = validateAndNormalizeNotificationEmails(
+      ownerEmail,
+      reminderTarget,
+      recipientEmail,
+      hasRecipientPermission,
     );
+    let existing = paymentNotificationPrefs.get(intentId);
+    let record = mergeNotificationPreferenceRecord(
+      existing,
+      normalizedOwnerEmail,
+      normalizedRecipientEmail,
+      reminderTarget,
+      reminderOptIn,
+      marketingOptIn,
+      notifyRecipientOnCreation,
+      hasRecipientPermission,
+    );
+    paymentNotificationPrefs.add(intentId, record);
+  };
+
+  public shared ({ caller }) func saveCapsuleNotificationPreferences(
+    publicId : Text,
+    ownerEmail : Text,
+    reminderTarget : ReminderTarget,
+    recipientEmail : ?Text,
+    reminderOptIn : Bool,
+    marketingOptIn : Bool,
+    notifyRecipientOnCreation : Bool,
+    hasRecipientPermission : Bool,
+  ) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized");
+    };
+    let capsuleId = switch (capsuleIdsByPublicId.get(publicId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    let capsule = switch (capsules.get(capsuleId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    if (capsule.creator != caller) {
+      Runtime.trap("Only the creator can update notification preferences for this capsule");
+    };
+
+    let (normalizedOwnerEmail, normalizedRecipientEmail) = validateAndNormalizeNotificationEmails(
+      ownerEmail,
+      reminderTarget,
+      recipientEmail,
+      hasRecipientPermission,
+    );
+    let existing = capsuleNotificationPrefs.get(capsule.id);
+    let record = mergeNotificationPreferenceRecord(
+      existing,
+      normalizedOwnerEmail,
+      normalizedRecipientEmail,
+      reminderTarget,
+      reminderOptIn,
+      marketingOptIn,
+      notifyRecipientOnCreation,
+      hasRecipientPermission,
+    );
+    capsuleNotificationPrefs.add(capsule.id, record);
   };
 
   public shared ({ caller }) func getPaymentNotificationPreferences(
@@ -644,6 +794,7 @@ persistent actor {
     unlockDate : Time.Time,
     messageCharCount : Nat,
     paymentIntentId : ?Text,
+    saveAsDraft : Bool,
   ) : async CapsuleId {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only users can create capsules");
@@ -702,6 +853,10 @@ persistent actor {
       };
     };
 
+    if (saveAsDraft and planTier == #free) {
+      Runtime.trap("Save draft is only available on paid plans.");
+    };
+
     let limits = planLimits(planTier);
     let now = effectiveNow();
     if (unlockDate > now + limits.maxUnlockHorizonNs) {
@@ -717,38 +872,10 @@ persistent actor {
       };
     };
 
-    if (fileRefs.size() > limits.maxFilesPerCapsule) {
-      if (planTier == #free) {
-        Runtime.trap("Free plan does not include file uploads.");
-      };
-        Runtime.trap("Too many files for one capsule.");
-    };
-
-    if (planTier != #free) {
-      var totalAttachmentBytes : Nat = 0;
-      for (fileRef in fileRefs.vals()) {
-        let fileId = decodeFileRef(fileRef);
-        let stored = switch (storedFiles.get(fileId)) {
-          case (null) { Runtime.trap("Referenced file not found"); };
-          case (?file) { file };
-        };
-
-        if (stored.uploadedBy != caller) {
-          Runtime.trap("File ownership mismatch");
-        };
-        if (stored.sizeBytes > limits.maxFileBytes) {
-          Runtime.trap("One or more files exceeds the per-file size limit for this plan.");
-        };
-
-        totalAttachmentBytes += stored.sizeBytes;
-      };
-
-      if (totalAttachmentBytes > limits.maxTotalAttachmentBytes) {
-        Runtime.trap("Total attachment size exceeds capsule limit.");
-      };
-    };
+    validateCapsuleAttachments(caller, planTier, fileRefs);
 
     let id = nextCapsuleId;
+    let attachmentsEncrypted = fileRefs.size() > 0;
     let capsule = {
       id;
       publicId;
@@ -759,6 +886,7 @@ persistent actor {
       unlockDate;
       createdDate = Time.now();
       planTier;
+      attachmentsEncrypted;
     };
     capsules.add(id, capsule);
     capsuleIdsByPublicId.add(publicId, id);
@@ -785,6 +913,10 @@ persistent actor {
           };
         };
       };
+    };
+
+    if (saveAsDraft) {
+      draftCapsules.add(id, true);
     };
 
     nextCapsuleId += 1;
@@ -839,6 +971,71 @@ persistent actor {
     fileId;
   };
 
+  public shared ({ caller }) func appendCapsuleFiles(
+    publicId : Text,
+    newFileRefs : [Storage.ExternalBlob],
+    filesEncrypted : Bool,
+  ) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can update capsules");
+    };
+    let capsuleId = switch (capsuleIdsByPublicId.get(publicId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    let capsule = switch (capsules.get(capsuleId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    if (capsule.creator != caller) {
+      Runtime.trap("Only the creator can add files to this capsule");
+    };
+    switch (draftCapsules.get(capsuleId)) {
+      case (?_) {};
+      case (null) { Runtime.trap("Capsule content is already finalized."); };
+    };
+    if (capsule.planTier == #free) {
+      Runtime.trap("Draft attachments are only available on paid plans.");
+    };
+    let merged = appendFileRefs(capsule.fileRefs, newFileRefs);
+    validateCapsuleAttachments(caller, capsule.planTier, merged);
+    let attachmentsEncrypted = if (newFileRefs.size() == 0) {
+      capsule.attachmentsEncrypted;
+    } else if (capsule.attachmentsEncrypted and not filesEncrypted) {
+      Runtime.trap("This canister uses encrypted attachments; upload ciphertext only.");
+    } else if (filesEncrypted) {
+      true;
+    } else {
+      capsule.attachmentsEncrypted;
+    };
+    capsules.add(
+      capsuleId,
+      { capsule with fileRefs = merged; attachmentsEncrypted },
+    );
+  };
+
+  public shared ({ caller }) func lockCapsule(publicId : Text) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can finalize capsules");
+    };
+    let capsuleId = switch (capsuleIdsByPublicId.get(publicId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    let capsule = switch (capsules.get(capsuleId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    if (capsule.creator != caller) {
+      Runtime.trap("Only the creator can finalize this capsule");
+    };
+    switch (draftCapsules.get(capsuleId)) {
+      case (?_) {};
+      case (null) { Runtime.trap("Capsule is already finalized."); };
+    };
+    draftCapsules.remove(capsuleId);
+  };
+
   public query ({ caller = _ }) func getCapsuleMetadata(id : Text) : async CapsuleMetadata {
     let capsule = getCapsuleByPublicId(id);
 
@@ -849,7 +1046,9 @@ persistent actor {
       unlockDate = capsule.unlockDate;
       createdDate = capsule.createdDate;
       isUnlocked = effectiveNow() >= capsule.unlockDate;
+      contentLocked = capsuleContentIsLocked(capsule.id);
       planTier = capsule.planTier;
+      attachmentsEncrypted = capsule.attachmentsEncrypted;
     };
   };
 
@@ -859,6 +1058,9 @@ persistent actor {
   } {
     let capsule = getCapsuleByPublicId(id);
 
+    if (not capsuleContentIsLocked(capsule.id)) {
+      Runtime.trap("Capsule content has not been finalized by the creator yet.");
+    };
     if (effectiveNow() < capsule.unlockDate) {
       Runtime.trap("Capsule is still locked until " # Int.toText(capsule.unlockDate));
     };
@@ -879,6 +1081,9 @@ persistent actor {
   } {
     let capsule = getCapsuleByPublicId(capsuleId);
 
+    if (not capsuleContentIsLocked(capsule.id)) {
+      Runtime.trap("Capsule content has not been finalized by the creator yet.");
+    };
     if (effectiveNow() < capsule.unlockDate) {
       Runtime.trap("Capsule is still locked");
     };
@@ -920,10 +1125,61 @@ persistent actor {
           unlockDate = c.unlockDate;
           createdDate = c.createdDate;
           isUnlocked = effectiveNow() >= c.unlockDate;
+          contentLocked = capsuleContentIsLocked(c.id);
           planTier = c.planTier;
+          attachmentsEncrypted = c.attachmentsEncrypted;
         };
       }
     ).sort();
+  };
+
+  // Creator-only: removes capsule rows and attachment blobs from stable storage.
+  // Payment intents keep usedByCapsuleId so a consumed paid slot cannot be reused after delete.
+  public shared ({ caller }) func deleteCapsule(publicId : Text) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized");
+    };
+    let capsuleId = switch (capsuleIdsByPublicId.get(publicId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    let capsule = switch (capsules.get(capsuleId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    if (capsule.creator != caller) {
+      Runtime.trap("Only the creator can delete this capsule");
+    };
+
+    for (fileRef in capsule.fileRefs.vals()) {
+      let fileId = decodeFileRef(fileRef);
+      storedFiles.remove(fileId);
+    };
+    capsuleNotificationPrefs.remove(capsule.id);
+    draftCapsules.remove(capsuleId);
+    capsules.remove(capsuleId);
+    capsuleIdsByPublicId.remove(publicId);
+  };
+
+  public shared ({ caller }) func updateCapsuleTitle(publicId : Text, newTitle : Text) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized");
+    };
+    if (newTitle.size() == 0) {
+      Runtime.trap("Capsule title cannot be empty");
+    };
+    let capsuleId = switch (capsuleIdsByPublicId.get(publicId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    let capsule = switch (capsules.get(capsuleId)) {
+      case (null) { Runtime.trap("Capsule not found"); };
+      case (?value) { value };
+    };
+    if (capsule.creator != caller) {
+      Runtime.trap("Only the creator can rename this capsule");
+    };
+    capsules.add(capsuleId, { capsule with title = newTitle });
   };
 
   public query ({ caller = _ }) func getTotalCapsuleCount() : async Nat {
@@ -1040,7 +1296,7 @@ persistent actor {
     purgedCapsuleCount;
   };
 
-  public shared ({ caller }) func getCapsuleNotificationPreferences(
+  public query ({ caller }) func getCapsuleNotificationPreferences(
     publicId : Text
   ) : async ?NotificationPreferences {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
